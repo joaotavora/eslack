@@ -50,7 +50,7 @@
 
 (defun eslack--get-internal (object keys)
   (cl-loop for key in keys
-           for a = object then res
+           for a = object then (cdr res)
            for res = (progn
                        (unless (listp a)
                          (eslack--error "expected %s to be an alist" a))
@@ -289,20 +289,52 @@
 (cl-defmethod eslack--event ((_type (eql :hello)) _message)
   (message "slack server says hello"))
 
+(defvar eslack--image-cache (make-hash-table :test #'equal))
+
+(defun eslack--insert-image (marker url)
+  (cl-flet ((insert-it
+             (image marker)
+             (with-current-buffer
+                 (marker-buffer marker)
+               (save-excursion
+                 (goto-char marker)
+                 (let ((inhibit-read-only t))
+                   (insert (propertize "[avatar]" 'display image)))))))
+    (let ((res (gethash url eslack--image-cache)))
+      (cond ((and (listp res)
+                  (eq 'image (car res)))
+             (insert-it res marker))
+            ((and (consp nil)
+                  (cl-every #'markerp res))
+             (setcdr res (cons marker (cdr res))))
+            (t
+             (puthash url (list marker) eslack--image-cache)
+             (url-retrieve url
+                           (lambda (status)
+                             (if (plist-get status :error)
+                                 (eslack--warning "cannot get avatar for %s" url)
+                               (search-forward "\n\n")
+                               (let ((image (create-image (buffer-substring-no-properties
+                                                           (point) (point-max))
+                                                          nil 'data-p)))
+                                 (cl-loop for marker in (gethash url eslack--image-cache)
+                                          do (insert-it image marker))
+                                 (puthash url image eslack--image-cache))))))))))
+
 (cl-defmethod eslack--event ((_type (eql :message)) message)
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
     (eslack--with-room-buffer ((eslack--connection) room)
       (pop-to-buffer (current-buffer))
-      (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
+      (let ((user (eslack--find (eslack--get message 'user) (eslack--users)))
+            (avatar-marker (copy-marker lui-output-marker)))
+        (set-marker-insertion-type avatar-marker nil)
         (lui-insert (propertize
-                     (format "%s%s: %s"
-                             (propertize " "
-                                         'eslack--avatar-placeholder t
-                                         'display "")
+                     (format "%s: %s"
                              (propertize (eslack--get user 'name)
                                          'eslack--user user)
                              (eslack--get message 'text))
-                     'eslack--message message))))))
+                     'eslack--message message))
+        (eslack--insert-image avatar-marker (eslack--get user 'profile 'image_24))))))
 
 (cl-defmethod eslack--event ((_type (eql :im-marked)) message)
   
