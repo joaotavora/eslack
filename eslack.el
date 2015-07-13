@@ -33,8 +33,17 @@
 
 ;;; Utils
 ;;;
+(defvar eslack--debug nil)
+
+(defun eslack--debug (format-control &rest format-args)
+  (when eslack--debug
+    (apply #'eslack--message format-control format-args)))
+
 (defun eslack--message (format-control &rest format-args)
   (message "%s" (apply #'format (concat "[eslack] " format-control) format-args)))
+
+(defun eslack--warning (format-control &rest format-args)
+  (display-warning 'eslack (apply #'format (concat "[eslack] " format-control) format-args) :error))
 
 (defun eslack--error (format-control &rest format-args)
   (error "%s" (apply #'format (concat "[eslack] " format-control) format-args)))
@@ -80,6 +89,10 @@
            def
            inherit-input-method))
 
+(defun eslack--keywordize (string)
+  (intern (concat ":"
+                  (replace-regexp-in-string "_" "-" string))))
+
 
 ;;; Connections
 ;;; 
@@ -90,14 +103,14 @@
 ;; SISCOG	joaot	xoxp-7449361824-7490502034-7536719025-df3a9e
 
 (defvar eslack--token "xoxp-7449361824-7490502034-7536719025-df3a9e")
-(defvar eslack--rtm-start-https-status)
-(defvar eslack--debug nil)
 
 (defvar eslack--connections (list))
 (defvar eslack--dispatching-connection nil
   "Intented to be let-bound")
 (defvar eslack--buffer-connection nil
   "Intended to be buffer-local")
+(defvar eslack--last-state nil
+  "For debug purposes")
 
 (defclass eslack--connection-object ()
   ((websocket  :initarg :websocket  :accessor eslack--connection-websocket)
@@ -146,35 +159,59 @@
 (defun eslack-close-all ()
   (interactive)
   (cl-loop for conn in eslack--connections
-           do (websocket-close (eslack--websocket conn)))
+           do (websocket-close (eslack--connection-websocket conn)))
   (setq eslack--connections nil))
 
-(defun eslack--opened (state url ws)
-  (eslack--message "WS connection established to %s!" url)
-  (push (make-instance 'eslack--connection-object
-                       :websocket ws
-                       :state state)
-        eslack--connections))
+(defun eslack ()
+  (interactive)
+  (url-retrieve
+   (format "https://slack.com/api/rtm.start?token=%s"
+           eslack--token)
+   (lambda (status)
+     (let ((error (plist-get status :error))
+           (redirect (plist-get status :redirect)))
+       (when error
+         (signal (car error) (cdr error)))
+       (when redirect
+         (error "slack requests that you try again to %a" redirect))
+       (search-forward "\n\n")
+       (let ((state (json-read)))
+         (setq eslack--last-state state)
+         (eslack--start-websockets state))))))
 
-(defun eslack--closed (_state _url _ws)
-  (eslack--message "right, closed!"))
+(defun eslack--opened (connection)
+  (eslack--message "Connection %s established!" connection)
+  (push connection eslack--connections))
 
-(defun eslack--handle-websocket-error (&rest args)
-  (eslack--message "oops something went wrong (%s)" args)
+(defun eslack--closed (connection)
+  (eslack--message "Connection closed!" connection))
+
+(defun eslack--handle-websocket-error (_connection args)
+  (eslack--message "Ooops something went wrong")
   (apply #'websocket-default-error-handler args))
 
-(defun eslack--process (event)
-  (eslack--message "a message saying %s" event))
+(defun eslack--process (connection frame)
+  (eslack--debug "a frame %s" frame)
+  (let ((payload (json-read-from-string (websocket-frame-payload frame)))
+        (eslack--dispatching-connection connection))
+    (eslack--event (eslack--keywordize (eslack--get payload 'type))
+                   payload)))
 
 (defun eslack--start-websockets (state)
-  (let ((url (eslack--get state 'url)))
+  (let ((url (eslack--get state 'url))
+        (connection nil))
     (websocket-open url 
-                    :on-open (lambda (ws) (eslack--opened state url ws))
+                    :on-open (lambda (ws)
+                               (setq connection (make-instance 'eslack--connection-object
+                                                               :websocket ws
+                                                               :state state))
+                               (eslack--opened connection))
                     :on-message (lambda (_ws f)
-                                  (eslack--process (websocket-frame-payload f)))
-                    :on-close (lambda (ws) (eslack--closed state url ws))
+                                  (eslack--process connection f))
+                    :on-close (lambda (_ws)
+                                (eslack--closed connection))
                     :on-error (lambda (&rest args)
-                                (eslack--handle-websocket-error args)))))
+                                (eslack--handle-websocket-error connection args)))))
 
 
 ;;; Major mode
@@ -182,8 +219,8 @@
 
 (define-derived-mode eslack-mode lui-mode "eslack"
   "A major mode for eslack rooms"
+  (setq-local left-margin-width 0)
   (lui-set-prompt "\n: "))
-
 
 
 ;;; Rooms
@@ -214,24 +251,64 @@
                      "[eslack] Room name? "
                      (mapcar #'eslack--room-name rooms)
                      nil t))
-         (room (cl-find room-name rooms :key (lambda (r)
-                                               (eslack--room-name r)))))
+         (room (cl-find room-name rooms :key #'eslack--room-name)))
     room))
 
 (defun eslack--buffer-name (connection room)
-  (format "* eslack: %s (%s) *"
+  (format "*%s (%s)*"
           (eslack--room-name room)
           (eslack--connection-name connection)))
+
+(defun eslack--call-with-room-buffer (connection room fn)
+  (let ((buffer (get-buffer-create (eslack--buffer-name connection room))))
+    (with-current-buffer buffer
+      (unless (eq major-mode 'eslack-mode) (eslack-mode))
+      (funcall fn))))
+
+(cl-defmacro eslack--with-room-buffer ((connection room) &body body)
+  (declare (debug (sexp sexp &rest form))
+           (indent 1))
+  `(eslack--call-with-room-buffer ,connection ,room (lambda () ,@body)))
 
 (defun eslack-join-room (connection room)
   (interactive (let* ((connection (eslack--prompt-for-connection-maybe)))
                  (list connection
                        (let ((eslack--dispatching-connection connection))
                          (eslack--prompt-for-room)))))
-  (let ((buffer (get-buffer-create (eslack--buffer-name connection room))))
-    (with-current-buffer buffer
-      (unless (eq major-mode 'eslack-mode) (eslack-mode))
-      (pop-to-buffer buffer))))
+  (eslack--with-room-buffer (connection room)
+    (pop-to-buffer (current-buffer))))
+
+
+;;; Event processing
+;;;
+(cl-defgeneric eslack--event (type message))
+
+(cl-defmethod eslack--event ((_type (eql :bla)) _message)
+  "yo")
+
+(cl-defmethod eslack--event ((_type (eql :hello)) _message)
+  (message "slack server says hello"))
+
+(cl-defmethod eslack--event ((_type (eql :message)) message)
+  (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
+    (eslack--with-room-buffer ((eslack--connection) room)
+      (pop-to-buffer (current-buffer))
+      (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
+        (lui-insert (propertize
+                     (format "%s%s: %s"
+                             (propertize " "
+                                         'eslack--avatar-placeholder t
+                                         'display "")
+                             (propertize (eslack--get user 'name)
+                                         'eslack--user user)
+                             (eslack--get message 'text))
+                     'eslack--message message))))))
+
+(cl-defmethod eslack--event ((_type (eql :im-marked)) message)
+  
+  )
+
+
 
 (provide 'eslack)
 ;;; eslack.el ends here
