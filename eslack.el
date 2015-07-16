@@ -224,6 +224,7 @@
 (define-derived-mode eslack-mode lui-mode "eslack"
   "A major mode for eslack rooms"
   (setq-local left-margin-width 0)
+  (set-buffer-multibyte t)
   (lui-set-prompt "\n: "))
 
 
@@ -397,7 +398,7 @@
                      (format "%s: %s"
                              (propertize (eslack--get user 'name)
                                          'eslack--user user)
-                             (eslack--get message 'text))
+                             (decode-coding-string (eslack--get message 'text) 'utf-8))
                      'eslack--message message))
         (eslack--insert-image avatar-marker (eslack--get user 'profile 'image_24))))))
 
