@@ -62,6 +62,9 @@
 (defun eslack--get (object key &rest more)
   (cdr (eslack--get-internal object (cons key more))))
 
+(defun eslack--has (object key)
+  (assoc key object))
+
 (gv-define-setter eslack--get (value object &rest more)
   `(setcdr (eslack--get-internal ,object (list ,@more))
            ,value))
@@ -197,7 +200,9 @@
   (eslack--debug "a frame %s" frame)
   (let ((payload (json-read-from-string (websocket-frame-payload frame)))
         (eslack--dispatching-connection connection))
-    (eslack--event (eslack--keywordize (eslack--get payload 'type))
+    (eslack--event (if (eslack--has payload 'reply_to)
+                       :reply-to
+                     (eslack--keywordize (eslack--get payload 'type)))
                    payload)))
 
 (defun eslack--start-websockets (state token)
@@ -220,10 +225,12 @@
 
 ;;; Major mode
 ;;;
+(defvar eslack--next-message-id 0)
 
 (define-derived-mode eslack-mode lui-mode "eslack"
   "A major mode for eslack rooms"
   (setq-local left-margin-width 0)
+  (setq-local lui-input-function 'eslack--send-message)
   (set-buffer-multibyte t)
   (lui-set-prompt "\n: "))
 
@@ -410,225 +417,281 @@
       (when (eq room eslack--buffer-room)
         (eslack--message "%s is typing" (eslack--get user 'name))))))
 
-(cl-defmethod eslack--event ((_type (eql :channel-marked)) message)
+(cl-defmethod eslack--event ((type (eql :channel-marked)) message)
   "Your channel read marker was updated"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-created)) message)
+(cl-defmethod eslack--event ((type (eql :channel-created)) message)
   "A team channel was created"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-joined)) message)
+(cl-defmethod eslack--event ((type (eql :channel-joined)) message)
   "You joined a channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-left)) message)
+(cl-defmethod eslack--event ((type (eql :channel-left)) message)
   "You left a channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-deleted)) message)
+(cl-defmethod eslack--event ((type (eql :channel-deleted)) message)
   "A team channel was deleted"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-rename)) message)
+(cl-defmethod eslack--event ((type (eql :channel-rename)) message)
   "A team channel was renamed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-archive)) message)
+(cl-defmethod eslack--event ((type (eql :channel-archive)) message)
   "A team channel was archived"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-unarchive)) message)
+(cl-defmethod eslack--event ((type (eql :channel-unarchive)) message)
   "A team channel was unarchived"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :channel-history-changed)) message)
+(cl-defmethod eslack--event ((type (eql :channel-history-changed)) message)
   "Bulk updates were made to a channel's history"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :im-created)) message)
+(cl-defmethod eslack--event ((type (eql :im-created)) message)
   "A direct message channel was created"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :im-open)) message)
+(cl-defmethod eslack--event ((type (eql :im-open)) message)
   "You opened a direct message channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :im-close)) message)
+(cl-defmethod eslack--event ((type (eql :im-close)) message)
   "You closed a direct message channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :im-marked)) message)
+(cl-defmethod eslack--event ((type (eql :im-marked)) message)
   "A direct message read marker was updated"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :im-history-changed)) message)
+(cl-defmethod eslack--event ((type (eql :im-history-changed)) message)
   "Bulk updates were made to a DM channel's history"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-joined)) message)
+(cl-defmethod eslack--event ((type (eql :group-joined)) message)
   "You joined a private group"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-left)) message)
+(cl-defmethod eslack--event ((type (eql :group-left)) message)
   "You left a private group"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-open)) message)
+(cl-defmethod eslack--event ((type (eql :group-open)) message)
   "You opened a group channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-close)) message)
+(cl-defmethod eslack--event ((type (eql :group-close)) message)
   "You closed a group channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-archive)) message)
+(cl-defmethod eslack--event ((type (eql :group-archive)) message)
   "A private group was archived"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-unarchive)) message)
+(cl-defmethod eslack--event ((type (eql :group-unarchive)) message)
   "A private group was unarchived"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-rename)) message)
+(cl-defmethod eslack--event ((type (eql :group-rename)) message)
   "A private group was renamed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-marked)) message)
+(cl-defmethod eslack--event ((type (eql :group-marked)) message)
   "A private group read marker was updated"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :group-history-changed)) message)
+(cl-defmethod eslack--event ((type (eql :group-history-changed)) message)
   "Bulk updates were made to a group's history"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-created)) message)
+(cl-defmethod eslack--event ((type (eql :file-created)) message)
   "A file was created"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-shared)) message)
+(cl-defmethod eslack--event ((type (eql :file-shared)) message)
   "A file was shared"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-unshared)) message)
+(cl-defmethod eslack--event ((type (eql :file-unshared)) message)
   "A file was unshared"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-public)) message)
+(cl-defmethod eslack--event ((type (eql :file-public)) message)
   "A file was made public"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-private)) message)
+(cl-defmethod eslack--event ((type (eql :file-private)) message)
   "A file was made private"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-change)) message)
+(cl-defmethod eslack--event ((type (eql :file-change)) message)
   "A file was changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-deleted)) message)
+(cl-defmethod eslack--event ((type (eql :file-deleted)) message)
   "A file was deleted"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-comment-added)) message)
+(cl-defmethod eslack--event ((type (eql :file-comment-added)) message)
   "A file comment was added"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-comment-edited)) message)
+(cl-defmethod eslack--event ((type (eql :file-comment-edited)) message)
   "A file comment was edited"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :file-comment-deleted)) message)
+(cl-defmethod eslack--event ((type (eql :file-comment-deleted)) message)
   "A file comment was deleted"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :pin-added)) message)
+(cl-defmethod eslack--event ((type (eql :pin-added)) message)
   "A pin was added to a channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :pin-removed)) message)
+(cl-defmethod eslack--event ((type (eql :pin-removed)) message)
   "A pin was removed from a channel"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :presence-change)) message)
+(cl-defmethod eslack--event ((type (eql :presence-change)) message)
   "A team member's presence changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :manual-presence-change)) message)
+(cl-defmethod eslack--event ((type (eql :manual-presence-change)) message)
   "You manually updated your presence"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :pref-change)) message)
+(cl-defmethod eslack--event ((type (eql :pref-change)) message)
   "You have updated your preferences"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :user-change)) message)
+(cl-defmethod eslack--event ((type (eql :user-change)) message)
   "A team member's data has changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :team-join)) message)
+(cl-defmethod eslack--event ((type (eql :team-join)) message)
   "A new team member has joined"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :star-added)) message)
+(cl-defmethod eslack--event ((type (eql :star-added)) message)
   "A team member has starred an item"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :star-removed)) message)
+(cl-defmethod eslack--event ((type (eql :star-removed)) message)
   "A team member removed a star"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :reaction-added)) message)
+(cl-defmethod eslack--event ((type (eql :reaction-added)) message)
   "A team member has added an emoji reaction to an item"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :reaction-removed)) message)
+(cl-defmethod eslack--event ((type (eql :reaction-removed)) message)
   "A team member removed an emoji reaction"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :emoji-changed)) message)
+(cl-defmethod eslack--event ((type (eql :emoji-changed)) message)
   "A team custom emoji has been added or changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :commands-changed)) message)
+(cl-defmethod eslack--event ((type (eql :commands-changed)) message)
   "A team slash command has been added or changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :team-plan-change)) message)
+(cl-defmethod eslack--event ((type (eql :team-plan-change)) message)
   "The team billing plan has changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :team-pref-change)) message)
+(cl-defmethod eslack--event ((type (eql :team-pref-change)) message)
   "A team preference has been updated"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :team-rename)) message)
+(cl-defmethod eslack--event ((type (eql :team-rename)) message)
   "The team name has changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :team-domain-change)) message)
+(cl-defmethod eslack--event ((type (eql :team-domain-change)) message)
   "The team domain has changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :email-domain-changed)) message)
+(cl-defmethod eslack--event ((type (eql :email-domain-changed)) message)
   "The team email domain has changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :bot-added)) message)
+(cl-defmethod eslack--event ((type (eql :bot-added)) message)
   "An integration bot was added"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :bot-changed)) message)
+(cl-defmethod eslack--event ((type (eql :bot-changed)) message)
   "An integration bot was changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :accounts-changed)) message)
+(cl-defmethod eslack--event ((type (eql :accounts-changed)) message)
   "The list of accounts a user is signed into has changed"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :team-migration-started)) message)
+(cl-defmethod eslack--event ((type (eql :team-migration-started)) message)
   "The team is being migrated between servers"
-  (eslack--debug "%s is unimplemented: %s" _type message))
+  (eslack--debug "%s is unimplemented: %s" type message))
+
+
+;;; Sending texts and other stuff
+;;;
+(defface eslack-pending-message-face
+  '((t (:inherit font-lock-doc-face)))
+  "Used for messages not yet acknowledged"
+  :group 'eslack)
+
+(defvar eslack--awayting-reply (make-hash-table)
+  "A hash table integer -> sent message")
+
+(defun eslack--send-message (text)
+  (let* ((id (cl-incf eslack--next-message-id))
+         (message `((:text . ,text)
+                    (:id . ,id)
+                    (:channel . ,(eslack--get eslack--buffer-room 'id))
+                    (:type . :message)))
+         (start (copy-marker lui-output-marker))
+         end)
+    (set-marker-insertion-type lui-output-marker nil)
+    (lui-insert (propertize
+                     (format "%s: %s"
+                             "me"
+                             text)
+                     'eslack--message message
+                     'face 'eslack-pending-message-face))
+    (setq end (copy-marker lui-output-marker))
+    (puthash id (list message start end) eslack--awayting-reply)
+    (websocket-send-text (eslack--connection-websocket (eslack--connection))
+                         (json-encode message))))
+
+(cl-defmethod eslack--event ((_type (eql :reply-to)) message)
+  "The team is being migrated between servers"
+  (let* ((id (eslack--get message 'reply_to))
+         (probe (gethash id eslack--awayting-reply)))
+    (if probe
+        (cl-destructuring-bind (_message start end)
+            probe
+          (with-current-buffer (marker-buffer start)
+            (let ((inhibit-read-only t)
+                  (lui-output-marker (copy-marker start))
+                  (text (eslack--get message 'text)))
+              (set-marker-insertion-type lui-output-marker t)
+              (goto-char start)
+              (lui-insert (propertize
+                     (format "%s: %s"
+                             "me"
+                             text)
+                     'eslack--message message
+                     'face 'eslack-pending-message-face))
+              (delete-region start end)
+              (remhash id eslack--awayting-reply))))
+      (eslack--error "Reply for unknown sent message"))))
+
+
 
 (provide 'eslack)
 ;;; eslack.el ends here
