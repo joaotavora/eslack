@@ -48,6 +48,7 @@
   (error "%s" (apply #'format (concat "[eslack] " format-control) format-args)))
 
 (defun eslack--get-internal (object keys)
+  ""
   (cl-loop for key in keys
            for a = object then (cdr res)
            for res = (progn
@@ -60,9 +61,12 @@
            finally return res))
 
 (defun eslack--get (object key &rest more)
+  "Search OBJECT for the value of KEY.
+OBJECT is an JSON alist"
   (cdr (eslack--get-internal object (cons key more))))
 
 (defun eslack--has (object key)
+  "Check if OBJECT has KEY"
   (assoc key object))
 
 (gv-define-setter eslack--get (value object &rest more)
@@ -70,6 +74,8 @@
            ,value))
 
 (cl-defun eslack--find (prop seq &key (key 'id) (test #'string=))
+  "Find PROP in sequence SEQ.
+SEQ is a JSON sequence."
   (cl-find prop seq :key (lambda (thing) (eslack--get thing key)) :test test))
 
 (defvar eslack-completing-read-function 'ido-completing-read)
@@ -106,25 +112,35 @@
 
 (defvar eslack--token "xoxp-7449361824-7490502034-7536719025-df3a9e")
 
-(defvar eslack--connections (list))
+(defvar eslack--connections (list)
+  "Global list of connections.")
+
 (defvar eslack--dispatching-connection nil
-  "Intented to be let-bound")
+  "Connection used within a lexical scope.
+Intended to be let-bound.")
 (defvar eslack--buffer-connection nil
-  "Intended to be buffer-local")
+  "Connection active in a particular buffer.
+Intended to be buffer-local")
 (defvar eslack--buffer-room nil
-  "Intended to be buffer-local")
+  "Server chatroom active in a particular buffer.
+Intended to be buffer-local")
 (defvar eslack--last-state nil
   "For debug purposes")
 
 (defclass eslack--connection-object ()
   ((websocket  :initarg :websocket  :accessor eslack--connection-websocket)
    (token :initarg :token :accessor eslack--connection-token)
-   (state :initarg :state :accessor eslack--connection-state)))
+   (state :initarg :state :accessor eslack--connection-state))
+  (:documentation "Represents an eslack connection.
+WEBSOCKET is a WEBSOCKET object wrapping the actual Emacs process.
+TOKEN is the security token.
+STATE is a JSON alist returned by the server on first contact."))
 
 (cl-defun eslack--connection-name (&optional (connection (eslack--connection)))
   (eslack--get (eslack--connection-state connection) 'team 'name))
 
 (defun eslack--prompt-for-connection-maybe ()
+  "Prompt user for a connection in `eslack--connections'."
   (cond ((and eslack--connections
               (null (cdr eslack--connections)))
          (first eslack--connections))
@@ -148,13 +164,16 @@
        ,@(cl-loop for prop in '(users channels groups ims bots)
                   collect `(cl-defun ,(intern (concat "eslack--" (symbol-name prop)))
                                (&optional (connection (eslack--connection)))
+                             ,(format "Retrieve CONNECTION's %S" prop)
                              (let ((state (eslack--connection-state connection)))
                                (eslack--get state ',prop))))))
 
   (eslack--define-connection-accessors))
 
-
 (defun eslack--connection ()
+  "Current connection.
+First try `eslack--dispatching-connection', then a buffer's
+connection, then the first of the global connection list."
   (or
    eslack--dispatching-connection
    eslack--buffer-connection
@@ -168,6 +187,7 @@
   (setq eslack--connections nil))
 
 (defun eslack ()
+  "Start an eslack connection to a server, identified by a token"
   (interactive)
   (url-retrieve
    (format "https://slack.com/api/rtm.start?token=%s"
