@@ -186,24 +186,29 @@ connection, then the first of the global connection list."
            do (websocket-close (eslack--connection-websocket conn)))
   (setq eslack--connections nil))
 
-(defun eslack ()
-  "Start an eslack connection to a server, identified by a token"
-  (interactive)
+(defun eslack--read-token ()
+  (read-from-minibuffer "Token: "
+                        (with-temp-buffer
+                             (clipboard-yank)
+                             (buffer-string))))
+
+(defun eslack (token)
+  "Start an eslack connection to a server, identified by TOKEN"
+  (interactive (list (eslack--read-token)))
   (url-retrieve
    (format "https://slack.com/api/rtm.start?token=%s"
-           eslack--token)
-   (let ((token eslack--token))
-     (lambda (status)
-       (let ((error (plist-get status :error))
-             (redirect (plist-get status :redirect)))
-         (when error
-           (signal (car error) (cdr error)))
-         (when redirect
-           (error "slack requests that you try again to %a" redirect))
-         (search-forward "\n\n")
-         (let ((state (json-read)))
-           (setq eslack--last-state state)
-           (eslack--start-websockets state token)))))))
+           token)
+   (lambda (status)
+     (let ((error (plist-get status :error))
+           (redirect (plist-get status :redirect)))
+       (when error
+         (signal (car error) (cdr error)))
+       (when redirect
+         (error "slack requests that you try again to %a" redirect))
+       (search-forward "\n\n")
+       (let ((state (json-read)))
+         (setq eslack--last-state state)
+         (eslack--start-websockets state token))))))
 
 (defun eslack--opened (connection)
   (eslack--message "Connection %s established!" connection)
