@@ -670,6 +670,11 @@ connection, then the first of the global connection list."
   "Used for messages not yet acknowledged"
   :group 'eslack)
 
+(defface eslack-own-message-face
+  '((t (:inherit default)))
+  "Face used for sent messages"
+  :group 'eslack)
+
 (defvar eslack--awayting-reply (make-hash-table)
   "A hash table integer -> sent message")
 
@@ -693,6 +698,25 @@ connection, then the first of the global connection list."
     (websocket-send-text (eslack--connection-websocket (eslack--connection))
                          (json-encode message))))
 
+(defun eslack--property-regions (beg end property &optional predicate)
+  "Search BEG and END for subregions with text property PROPERTY.
+Returns a list of pairs ((SUBREGION-BEG SUBREGION-END) ...) for
+the subregions wherein the property value verifies
+PREDICATE. PREDICATE defaults to `identity'"
+  (cl-loop with predicate = (or predicate
+                                #'identity)
+           for start = beg then (next-single-property-change next property nil end)
+           for start-value = (get-text-property start property)
+           for next = (and start
+                           (if (funcall predicate start-value)
+                               (next-single-property-change start property nil end)
+                             start))
+           for next-value = (get-text-property next property)
+           while (and start next (< start end))
+           when (and (funcall predicate start-value)
+                     (not (funcall predicate next-value)))
+           collect (list start next)))
+
 (cl-defmethod eslack--event ((_type (eql :reply-to)) message)
   "The team is being migrated between servers"
   (let* ((id (eslack--get message 'reply_to))
@@ -701,18 +725,9 @@ connection, then the first of the global connection list."
         (cl-destructuring-bind (_message start end)
             probe
           (with-current-buffer (marker-buffer start)
-            (let ((inhibit-read-only t)
-                  (lui-output-marker (copy-marker start))
-                  (text (eslack--get message 'text)))
-              (set-marker-insertion-type lui-output-marker t)
-              (goto-char start)
-              (lui-insert (propertize
-                     (format "%s: %s"
-                             "me"
-                             text)
-                     'eslack--message message
-                     'face 'eslack-pending-message-face))
-              (delete-region start end)
+            (let ((inhibit-read-only t))
+              (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message)
+                       do (add-text-properties start end '(face eslack-own-message-face)))
               (remhash id eslack--awayting-reply))))
       (eslack--error "Reply for unknown sent message"))))
 
