@@ -20,7 +20,15 @@
 
 ;;; Commentary:
 
-;; 
+;; The entry point is M-x eslack, which will prompt you for an API
+;; developer token to a Slack team.
+;;
+;; For the moment that is the only way to connect to a Slack team,
+;; later on other authentication methods may be devised.
+;;
+;; To see a list of Slack tokens to the teams you're signed on to,
+;; visit https://api.slack.com/web and navigate to the end of the
+;; page.
 
 ;;; Code:
 
