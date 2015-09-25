@@ -35,6 +35,7 @@
 (require 'websocket)
 (require 'url)
 (require 'lui)
+(require 'tracking)
 (require 'json)
 (require 'eieio)
 
@@ -430,7 +431,8 @@ connection, then the first of the global connection list."
 (cl-defmethod eslack--event ((_type (eql :message)) message)
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
     (eslack--with-room-buffer ((eslack--connection) room)
-      (pop-to-buffer (current-buffer))
+      ;; (pop-to-buffer (current-buffer))
+      (tracking-add-buffer (current-buffer))
       (let ((user (eslack--find (eslack--get message 'user) (eslack--users)))
             (avatar-marker (copy-marker lui-output-marker)))
         (set-marker-insertion-type avatar-marker nil)
