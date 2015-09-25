@@ -767,8 +767,10 @@ PREDICATE. PREDICATE defaults to `identity'"
                      (not (funcall predicate next-value)))
            collect (list start next)))
 
-(cl-defmethod eslack--event ((_type (eql :reply-to)) message)
-  "Handle Slack's confirmation to a sent message"
+(cl-defmethod eslack--event ((_type (eql :reply-to)) _subtype message)
+  "Handle Slack's confirmation to a sent message.
+The `reply-to' type doesn't really exist in the Slack API, this
+particular method is hack, albeit a pacific one."
   (let* ((id (eslack--get message 'reply_to))
          (probe (gethash id eslack--awayting-reply)))
     (if probe
