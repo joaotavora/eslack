@@ -230,10 +230,45 @@ connection, then the first of the global connection list."
   (eslack--message "Ooops something went wrong")
   (apply #'websocket-default-error-handler args))
 
+(defvar eslack-log-events t
+  "If non-nil log events for each connection into a temporary
+  buffer.")
+
+(defun eslack-events-buffer (connection &optional pop-to-buffer)
+  "Return or create the eslack event log buffer."
+  (interactive (list (eslack--connection) t))
+  (let ((buffer (get-buffer-create (format "*eslack events (%s)*"
+                             (eslack--connection-name connection)))))
+    (when pop-to-buffer
+      (pop-to-buffer buffer))
+    buffer))
+
+(defun eslack--pprint-event (event buffer)
+  "Pretty print EVENT in BUFFER with limited depth and width."
+  (let ((print-length 20)
+	(print-level 6)
+	(pp-escape-newlines t))
+    (pp event buffer)))
+
+(defun eslack--log-event (event connection)
+  "Record the fact that EVENT occurred in PROCESS."
+  (when eslack-log-events
+    (with-current-buffer (eslack-events-buffer connection)
+      ;; trim?
+      (when (> (buffer-size) 100000)
+        (goto-char (/ (buffer-size) 2))
+        (re-search-forward "^(" nil t)
+        (delete-region (point-min) (point)))
+      (goto-char (point-max))
+      (save-excursion
+        (eslack--pprint-event event (current-buffer)))
+      (goto-char (point-max)))))
+
 (defun eslack--process (connection frame)
   (eslack--debug "a frame %s" frame)
   (let ((payload (json-read-from-string (websocket-frame-payload frame)))
         (eslack--dispatching-connection connection))
+    (eslack--log-event payload connection)
     (eslack--event (if (eslack--has payload 'reply_to)
                        :reply-to
                      (eslack--keywordize (eslack--get payload 'type)))
