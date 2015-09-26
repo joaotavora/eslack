@@ -303,7 +303,9 @@ connection, then the first of the global connection list."
   (setq-local left-margin-width 0)
   (setq-local lui-input-function 'eslack--send-message)
   (set-buffer-multibyte t)
-  (lui-set-prompt "\n: "))
+  (lui-set-prompt "\n: ")
+  (add-hook 'post-self-insert-hook 'eslack--send-typing-indicator-maybe
+            'append 'local))
 
 
 ;;; Rooms
@@ -747,6 +749,21 @@ connection, then the first of the global connection list."
     (puthash id (list message start end) eslack--awayting-reply)
     (websocket-send-text (eslack--connection-websocket (eslack--connection))
                          (json-encode message))))
+
+(defvar eslack--last-typing-indicator-timestamp (current-time))
+
+(defun eslack--send-typing-indicator-maybe ()
+  (unless (< (time-to-seconds
+              (time-since
+               eslack--last-typing-indicator-timestamp))
+             3)
+    (let* ((id (cl-incf eslack--next-message-id))
+           (message `((:id . ,id)
+                      (:channel . ,(eslack--get eslack--buffer-room 'id))
+                      (:type . :typing))))
+      (websocket-send-text (eslack--connection-websocket (eslack--connection))
+                           (json-encode message))
+      (setq-local eslack--last-typing-indicator-timestamp (current-time)))))
 
 (defun eslack--property-regions (beg end property &optional predicate)
   "Search BEG and END for subregions with text property PROPERTY.
