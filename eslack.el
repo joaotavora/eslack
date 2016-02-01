@@ -276,7 +276,7 @@ connection, then the first of the global connection list."
 (defun eslack--opened (connection)
   (eslack--debug "Connection to %s established" (eslack--connection-name connection))
   (when eslack--default-connection
-    (eslack--warning "%s is not the new default connection" (eslack--connection-name connection)))
+    (eslack--warning "%s is now the new default connection" (eslack--connection-name connection)))
   (setq eslack--default-connection connection)
   (push connection eslack--connections))
 
