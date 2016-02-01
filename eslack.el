@@ -131,6 +131,9 @@ Intended to be let-bound.")
 (defvar eslack--buffer-connection nil
   "Connection active in a particular buffer.
 Intended to be buffer-local")
+(defvar eslack--default-connection nil
+  "Default connection to use when no dispatching or buffer
+  connection." )
 (defvar eslack--buffer-room nil
   "Server chatroom active in a particular buffer.
 Intended to be buffer-local")
@@ -183,6 +186,31 @@ STATE is a JSON alist returned by the server on first contact."))
   (websocket-send-text (eslack--connection-websocket connection)
                        (json-encode message)))
 
+(defun eslack-list-connections ()
+  (interactive)
+  (with-current-buffer
+      (get-buffer-create "*eslack-connections*")
+    (let ((p (point))
+          (inhibit-read-only t))
+      (erase-buffer)
+      (tabulated-list-mode)
+      (set (make-local-variable 'tabulated-list-format)
+       `[("Default" 8) ("Name" 24) ("Token" 24 t)])
+      (tabulated-list-init-header)
+      (set (make-local-variable 'tabulated-list-entries)
+           (mapcar
+            (lambda (conn)
+              (list conn
+                    `[,(if (eq eslack--default-connection conn) "*" " ")
+                      ,(eslack--connection-name conn)
+                      ,(eslack--connection-token conn)
+                      ;; ,(eslack--connection-state conn)
+                      ]))
+            eslack--connections))
+      (tabulated-list-print)
+      (goto-char p)
+      (pop-to-buffer (current-buffer)))))
+
 (eval-and-compile
   (defmacro eslack--define-connection-accessors ()
     `(progn
@@ -202,14 +230,13 @@ connection, then the first of the global connection list."
   (or
    eslack--dispatching-connection
    eslack--buffer-connection
-   (first eslack--connections)
+   eslack--default-connection
    (eslack--error "no usable connections")))
 
 (defun eslack-close-all ()
   (interactive)
   (cl-loop for conn in eslack--connections
-           do (websocket-close (eslack--connection-websocket conn)))
-  (setq eslack--connections nil))
+           do (websocket-close (eslack--connection-websocket conn))))
 
 (defun eslack--read-token ()
   (read-from-minibuffer "Token: "
@@ -248,10 +275,17 @@ connection, then the first of the global connection list."
 
 (defun eslack--opened (connection)
   (eslack--debug "Connection to %s established" (eslack--connection-name connection))
+  (when eslack--default-connection
+    (eslack--warning "%s is not the new default connection" (eslack--connection-name connection)))
+  (setq eslack--default-connection connection)
   (push connection eslack--connections))
 
 (defun eslack--closed (connection)
-  (eslack--message "Connection to %s closed" (eslack--connection-name connection)))
+  (eslack--message "Connection to %s closed" (eslack--connection-name connection))
+  (setq eslack--connections
+        (delete connection eslack--connections))
+  (when (eq eslack--default-connection connection)
+    (setq eslack--default-connection nil)))
 
 (defun eslack--handle-websocket-error (_connection args)
   (eslack--warning "Ooops something went wrong")
