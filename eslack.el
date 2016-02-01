@@ -788,42 +788,57 @@ CONNECTION can also be a string, the API token in use for this connection"
 (defvar eslack--awayting-reply (make-hash-table)
   "A hash table integer -> sent message")
 
+(defun eslack--connection-live-p (connection)
+  ;; fixme: brittle...
+  (memq connection eslack--connections))
+
+(cl-defmacro eslack--checking-connection (&body body)
+  `(progn
+     (unless (eslack--connection-live-p eslack--buffer-connection)
+       (eslack--error "Cannot find this connection (%s) in global list of connections"
+                      (eslack--connection-name eslack--buffer-connection)))
+     ,@body))
+
+(defun eslack--websocket-send (connection message)
+  (websocket-send-text (eslack--connection-websocket connection)
+                       (json-encode message)))
+
 (defun eslack--send-message (text)
-  (let* ((id (cl-incf eslack--next-message-id))
-         (message `((:text . ,text)
-                    (:id . ,id)
-                    (:channel . ,(eslack--get eslack--buffer-room 'id))
-                    (:type . :message)))
-         (start (copy-marker lui-output-marker))
-         end)
-    (set-marker-insertion-type lui-output-marker nil)
-    (lui-insert (propertize
-                     (format "%s: %s"
-                             "me"
-                             text)
-                     'eslack--message message
-                     'face 'eslack-pending-message-face))
-    (setq end (copy-marker lui-output-marker))
-    (puthash id (list message start end) eslack--awayting-reply)
-    (let ((connection (eslack--connection)))
-      (eslack--log-event message connection :outgoing-wss)
-      (websocket-send-text (eslack--connection-websocket connection)
-                           (json-encode message)))))
+  (eslack--checking-connection
+   (let* ((id (cl-incf eslack--next-message-id))
+          (message `((:text . ,text)
+                     (:id . ,id)
+                     (:channel . ,(eslack--get eslack--buffer-room 'id))
+                     (:type . :message)))
+          (start (copy-marker lui-output-marker))
+          end)
+     (set-marker-insertion-type lui-output-marker nil)
+     (lui-insert (propertize
+                  (format "%s: %s"
+                          "me"
+                          text)
+                  'eslack--message message
+                  'face 'eslack-pending-message-face))
+     (setq end (copy-marker lui-output-marker))
+     (puthash id (list message start end) eslack--awayting-reply)
+     (let ((connection (eslack--connection)))
+       (eslack--log-event message connection :outgoing-wss)
+       (eslack--websocket-send connection message)))))
 
 (defvar eslack--last-typing-indicator-timestamp (current-time))
 
 (defun eslack--send-typing-indicator-maybe ()
-  (unless (< (time-to-seconds
-              (time-since
-               eslack--last-typing-indicator-timestamp))
-             3)
-    (let* ((id (cl-incf eslack--next-message-id))
-           (message `((:id . ,id)
-                      (:channel . ,(eslack--get eslack--buffer-room 'id))
-                      (:type . :typing))))
-      (websocket-send-text (eslack--connection-websocket (eslack--connection))
-                           (json-encode message))
-      (setq-local eslack--last-typing-indicator-timestamp (current-time)))))
+  (eslack--checking-connection
+   (unless (< (time-to-seconds
+               (time-since
+                eslack--last-typing-indicator-timestamp))
+              3)
+     (let* ((id (cl-incf eslack--next-message-id))
+            (message `((:id . ,id)
+                       (:channel . ,(eslack--get eslack--buffer-room 'id))
+                       (:type . :typing))))
+       (eslack--websocket-send eslack--buffer-connection message)
+       (setq-local eslack--last-typing-indicator-timestamp (current-time))))))
 
 (defun eslack--property-regions (beg end property &optional predicate)
   "Search BEG and END for subregions with text property PROPERTY.
