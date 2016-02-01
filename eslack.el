@@ -38,6 +38,7 @@
 (require 'tracking)
 (require 'json)
 (require 'eieio)
+(require 'cl-lib)
 
 
 ;;; Utils
@@ -204,20 +205,31 @@ connection, then the first of the global connection list."
 (defun eslack (token)
   "Start an eslack connection to a server, identified by TOKEN"
   (interactive (list (eslack--read-token)))
-  (url-retrieve
-   (format "https://slack.com/api/rtm.start?token=%s"
-           token)
-   (lambda (status)
-     (let ((error (plist-get status :error))
-           (redirect (plist-get status :redirect)))
-       (when error
-         (signal (car error) (cdr error)))
-       (when redirect
-         (error "slack requests that you try again to %a" redirect))
-       (search-forward "\n\n")
-       (let ((state (json-read)))
-         (setq eslack--last-state state)
-         (eslack--start-websockets state token))))))
+  (let ((sig (cl-gensym "eslack--")))
+    (eslack--log-event `(:connection-attempt
+                         .
+                         ((:token . ,token)
+                          (:sig . ,sig)))
+                       token
+                       :outgoing-attempt)
+    (url-retrieve
+     (format "https://slack.com/api/rtm.start?token=%s"
+             token)
+     (lambda (status)
+       (eslack--log-event `((:sig . ,sig)
+                            (:http-status . ,status))
+                          token
+                          :incoming-http)
+       (let ((error (plist-get status :error))
+             (redirect (plist-get status :redirect)))
+         (when error
+           (signal (car error) (cdr error)))
+         (when redirect
+           (error "slack requests that you try again to %a" redirect))
+         (search-forward "\n\n")
+         (let ((state (json-read)))
+           (setq eslack--last-state state)
+           (eslack--start-websockets state token)))))))
 
 (defun eslack--opened (connection)
   (eslack--debug "Connection to %s established" (eslack--connection-name connection))
@@ -234,12 +246,31 @@ connection, then the first of the global connection list."
   "If non-nil log events for each connection into a temporary
   buffer.")
 
+(defvar eslack--events-buffer-token nil)
+
 (defun eslack-events-buffer (connection &optional pop-to-buffer)
   "Return or create the eslack event log buffer."
   (interactive (list (eslack--connection) t))
-  (let ((buffer (get-buffer-create
-                 (format "*eslack events (%s)*"
-                         (eslack--connection-name connection)))))
+  (let* ((token (if (eslack--connection-object-p connection)
+                    (eslack--connection-token connection)
+                  connection))
+         (buffer (cl-find token (buffer-list)
+                         :test (lambda (token buffer)
+                                 (with-current-buffer buffer
+                                   (and (boundp 'eslack--events-buffer-token)
+                                        (string= eslack--events-buffer-token
+                                                 token)))))))
+    (unless buffer
+      (setq buffer
+            (with-current-buffer (generate-new-buffer "*eslack events*")
+              (emacs-lisp-mode) ; fixme: perhaps use some other mode
+              (setq-local eslack--events-buffer-token token)
+              (current-buffer))))
+    (with-current-buffer buffer
+      (when (and connection
+                 (not eslack--buffer-connection))
+        (setq-local eslack--buffer-connection connection)
+        (rename-buffer (format "*eslack events (%s)*" (eslack--connection-name connection)) 'unique)))
     (when pop-to-buffer
       (pop-to-buffer buffer))
     buffer))
@@ -252,11 +283,10 @@ connection, then the first of the global connection list."
     (pp event buffer)))
 
 (cl-defun eslack--log-event (event connection type)
-  "Record the fact that EVENT occurred in PROCESS."
+  "Record the fact that EVENT occurred in PROCESS.
+CONNECTION can also be a string, the API token in use for this connection"
   (when eslack-log-events
     (with-current-buffer (eslack-events-buffer connection)
-      (unless (eq major-mode 'emacs-lisp-mode)
-        (emacs-lisp-mode))
       ;; trim?
       (when (> (buffer-size) 100000)
         (goto-char (/ (buffer-size) 2))
