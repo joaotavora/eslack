@@ -834,5 +834,3 @@ particular method is hack, albeit a pacific one."
 
 (provide 'eslack)
 ;;; eslack.el ends here
-
-: 
