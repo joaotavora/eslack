@@ -168,6 +168,21 @@ STATE is a JSON alist returned by the server on first contact."))
          (eslack--error "No connections, start one with `%s'"
                         (substitute-command-keys "\\[eslack]")))))
 
+(defun eslack--connection-live-p (connection)
+  ;; fixme: brittle...
+  (memq connection eslack--connections))
+
+(cl-defmacro eslack--checking-connection (&body body)
+  `(progn
+     (unless (eslack--connection-live-p eslack--buffer-connection)
+       (eslack--error "Cannot find this connection (%s) in global list of connections"
+                      (eslack--connection-name eslack--buffer-connection)))
+     ,@body))
+
+(defun eslack--websocket-send (connection message)
+  (websocket-send-text (eslack--connection-websocket connection)
+                       (json-encode message)))
+
 (eval-and-compile
   (defmacro eslack--define-connection-accessors ()
     `(progn
@@ -785,23 +800,8 @@ CONNECTION can also be a string, the API token in use for this connection"
   "Face used for sent messages"
   :group 'eslack)
 
-(defvar eslack--awayting-reply (make-hash-table)
+(defvar eslack--awaiting-reply (make-hash-table)
   "A hash table integer -> sent message")
-
-(defun eslack--connection-live-p (connection)
-  ;; fixme: brittle...
-  (memq connection eslack--connections))
-
-(cl-defmacro eslack--checking-connection (&body body)
-  `(progn
-     (unless (eslack--connection-live-p eslack--buffer-connection)
-       (eslack--error "Cannot find this connection (%s) in global list of connections"
-                      (eslack--connection-name eslack--buffer-connection)))
-     ,@body))
-
-(defun eslack--websocket-send (connection message)
-  (websocket-send-text (eslack--connection-websocket connection)
-                       (json-encode message)))
 
 (defun eslack--send-message (text)
   (eslack--checking-connection
@@ -820,7 +820,7 @@ CONNECTION can also be a string, the API token in use for this connection"
                   'eslack--message message
                   'face 'eslack-pending-message-face))
      (setq end (copy-marker lui-output-marker))
-     (puthash id (list message start end) eslack--awayting-reply)
+     (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
        (eslack--log-event message connection :outgoing-wss)
        (eslack--websocket-send connection message)))))
@@ -864,7 +864,7 @@ PREDICATE. PREDICATE defaults to `identity'"
 The `reply-to' type doesn't really exist in the Slack API, this
 particular method is hack, albeit a pacific one."
   (let* ((id (eslack--get message 'reply_to))
-         (probe (gethash id eslack--awayting-reply)))
+         (probe (gethash id eslack--awaiting-reply)))
     (if probe
         (cl-destructuring-bind (_message start end)
             probe
@@ -872,7 +872,7 @@ particular method is hack, albeit a pacific one."
             (let ((inhibit-read-only t))
               (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message)
                        do (add-text-properties start end '(face eslack-own-message-face)))
-              (remhash id eslack--awayting-reply))))
+              (remhash id eslack--awaiting-reply))))
       (eslack--debug "Ignoring reply for unknown sent message"))))
 
 
