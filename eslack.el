@@ -220,14 +220,14 @@ connection, then the first of the global connection list."
          (eslack--start-websockets state token))))))
 
 (defun eslack--opened (connection)
-  (eslack--message "Connection %s established!" connection)
+  (eslack--debug "Connection to %s established" (eslack--connection-name connection))
   (push connection eslack--connections))
 
 (defun eslack--closed (connection)
-  (eslack--message "Connection closed!" connection))
+  (eslack--message "Connection to %s closed" (eslack--connection-name connection)))
 
 (defun eslack--handle-websocket-error (_connection args)
-  (eslack--message "Ooops something went wrong")
+  (eslack--warning "Ooops something went wrong")
   (apply #'websocket-default-error-handler args))
 
 (defvar eslack-log-events t
@@ -237,8 +237,9 @@ connection, then the first of the global connection list."
 (defun eslack-events-buffer (connection &optional pop-to-buffer)
   "Return or create the eslack event log buffer."
   (interactive (list (eslack--connection) t))
-  (let ((buffer (get-buffer-create (format "*eslack events (%s)*"
-                             (eslack--connection-name connection)))))
+  (let ((buffer (get-buffer-create
+                 (format "*eslack events (%s)*"
+                         (eslack--connection-name connection)))))
     (when pop-to-buffer
       (pop-to-buffer buffer))
     buffer))
@@ -250,10 +251,12 @@ connection, then the first of the global connection list."
 	(pp-escape-newlines t))
     (pp event buffer)))
 
-(defun eslack--log-event (event connection)
+(cl-defun eslack--log-event (event connection type)
   "Record the fact that EVENT occurred in PROCESS."
   (when eslack-log-events
     (with-current-buffer (eslack-events-buffer connection)
+      (unless (eq major-mode 'emacs-lisp-mode)
+        (emacs-lisp-mode))
       ;; trim?
       (when (> (buffer-size) 100000)
         (goto-char (/ (buffer-size) 2))
@@ -261,14 +264,16 @@ connection, then the first of the global connection list."
         (delete-region (point-min) (point)))
       (goto-char (point-max))
       (save-excursion
-        (eslack--pprint-event event (current-buffer)))
+        (eslack--pprint-event `(,type
+                                ,event)
+                              (current-buffer)))
       (goto-char (point-max)))))
 
 (defun eslack--process (connection frame)
-  (eslack--debug "a frame %s" frame)
+  (eslack--debug "an incoming frame %s" frame)
   (let ((payload (json-read-from-string (websocket-frame-payload frame)))
         (eslack--dispatching-connection connection))
-    (eslack--log-event payload connection)
+    (eslack--log-event payload connection :incoming-wss)
     (eslack--event (if (eslack--has payload 'reply_to)
                        :reply-to
                      (eslack--keywordize (eslack--get payload 'type)))
@@ -351,7 +356,8 @@ connection, then the first of the global connection list."
         (eslack-mode)
         (setq-local eslack--buffer-room room)
         (setq-local eslack--buffer-connection connection))
-      (funcall fn))))
+      (funcall fn)
+      (goto-char (point-max)))))
 
 (cl-defmacro eslack--with-room-buffer ((connection room) &body body)
   (declare (debug (sexp sexp &rest form))
@@ -365,7 +371,7 @@ connection, then the first of the global connection list."
                          (eslack--prompt-for-room)))))
   (eslack--post :channels.join
                 `((name . ,(eslack--get room 'name)))
-                (lambda (object)
+                (lambda (_object)
                   (eslack--with-room-buffer (connection room)
                     (pop-to-buffer (current-buffer))))))
 
@@ -411,36 +417,53 @@ connection, then the first of the global connection list."
                                    (on-error (lambda (_sym data)
                                                (eslack--error
                                                 "Web API fail %s" data))))
-  (let ((url-request-method (upcase (if (keywordp method)
-                                        (substring (symbol-name method) 1)
-                                      (symbol-name method))))
-        (url-request-extra-headers (if json-params
-                                       '(("Content-Type" . "application/json"))))
-        (url-request-data
-         (if json-params
-             (json-encode json-params)))
-        (url
-         (concat url "?"
-                 (cl-loop for (avp . rest) on params
-                          for (a . v) = avp
-                          concat (format "%s" a)
-                          concat "="
-                          concat (format "%s" v)
-                          when rest concat "&"
-                          ))))
-    (url-retrieve url (lambda (status)
-                        (let ((oops (plist-get status :error)))
-                          (cond (oops
-                                 (funcall on-error status))
-                                ((plist-get status :redirect)
-                                 (eslack--web-request (plist-get status :redirect) method :json-params params
-                                                      :params params
-                                                      :on-success on-success
-                                                      :on-error on-error))
-                                (on-success
-                                 (search-forward "\n\n")
-                                 (let ((object (json-read)))
-                                   (funcall on-success status object)))))))))
+  (let ((sig (cl-gensym "eslack--"))
+        (connection (eslack--connection)))
+    (eslack--log-event `((:url . ,url)
+                         (:method . ,method)
+                         (:sig . ,sig)
+                         (:json-params . ,json-params)
+                         (:params . ,params))
+                       connection
+                       :outgoing-http)
+    (let ((url-request-method (upcase (if (keywordp method)
+                                          (substring (symbol-name method) 1)
+                                        (symbol-name method))))
+          (url-request-extra-headers (if json-params
+                                         '(("Content-Type" . "application/json"))))
+          (url-request-data
+           (if json-params
+               (json-encode json-params)))
+          (url
+           (concat url "?"
+                   (cl-loop for (avp . rest) on params
+                            for (a . v) = avp
+                            concat (format "%s" a)
+                            concat "="
+                            concat (format "%s" v)
+                            when rest concat "&"
+                            ))))
+      (url-retrieve url (lambda (status)
+                          (eslack--log-event `((:sig . ,sig)
+                                               (:http-status . ,status))
+                                             connection
+                                             :incoming-http)
+                          (let ((oops (plist-get status :error)))
+                            (cond (oops
+                                   (funcall on-error status))
+                                  ((plist-get status :redirect)
+                                   (eslack--web-request (plist-get status :redirect) method :json-params params
+                                                        :params params
+                                                        :on-success on-success
+                                                        :on-error on-error))
+                                  (on-success
+                                   (search-forward "\n\n")
+                                   (let ((object (json-read)))
+                                     (eslack--log-event `((:sig . ,sig)
+                                                          (:json . ,object))
+                                                        connection
+                                                        :incoming-http-success)
+                                     (funcall on-success status object))))))))))
 
 (defun eslack--post (method params on-success)
   (eslack--web-request (format "https://slack.com/api/%s"
@@ -461,13 +484,10 @@ connection, then the first of the global connection list."
 ;;;
 (cl-defgeneric eslack--event (type message))
 
-(cl-defmethod eslack--event ((_type (eql :bla)) _subtype _message)
-  "yo")
-
 (cl-defmethod eslack--event ((_type (eql :hello)) _subtype _message)
-  (eslack--message "%s says hello!" (eslack--connection-name)))
+  (eslack--message "%s says hello. Use \\[eslack-join-room] to start chatting" (eslack--connection-name)))
 
-(cl-defmethod eslack--event ((_type (eql :message)) (subtype (eql nil)) message)
+(cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql nil)) message)
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
     (eslack--with-room-buffer ((eslack--connection) room)
       ;; (pop-to-buffer (current-buffer))
@@ -714,6 +734,14 @@ connection, then the first of the global connection list."
   "The team is being migrated between servers"
   (eslack--debug "%s is unimplemented: %s" type message))
 
+(cl-defmethod eslack--event ((type (eql :reconnect-url)) _subtype message)
+  "An \"experimental\" event, according to api.slack.com"
+  (eslack--debug "%s is unimplemented: %s" type message))
+
+(cl-defmethod eslack--event ((_type (eql :error)) _subtype message)
+  "An error reported by the RTM API. Downgrade it to a warning"
+  (eslack--warning "RTM error: %s" (eslack--get message 'error 'msg)))
+
 
 ;;; Sending texts and other stuff
 ;;;
@@ -747,8 +775,10 @@ connection, then the first of the global connection list."
                      'face 'eslack-pending-message-face))
     (setq end (copy-marker lui-output-marker))
     (puthash id (list message start end) eslack--awayting-reply)
-    (websocket-send-text (eslack--connection-websocket (eslack--connection))
-                         (json-encode message))))
+    (let ((connection (eslack--connection)))
+      (eslack--log-event message connection :outgoing-wss)
+      (websocket-send-text (eslack--connection-websocket connection)
+                           (json-encode message)))))
 
 (defvar eslack--last-typing-indicator-timestamp (current-time))
 
@@ -798,7 +828,7 @@ particular method is hack, albeit a pacific one."
               (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message)
                        do (add-text-properties start end '(face eslack-own-message-face)))
               (remhash id eslack--awayting-reply))))
-      (eslack--error "Reply for unknown sent message"))))
+      (eslack--debug "Ignoring reply for unknown sent message"))))
 
 
 
