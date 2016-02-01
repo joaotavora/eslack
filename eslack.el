@@ -175,12 +175,26 @@ STATE is a JSON alist returned by the server on first contact."))
   ;; fixme: brittle...
   (memq connection eslack--connections))
 
-(cl-defmacro eslack--checking-connection (&body body)
+(cl-defmacro eslack--checking-connection ((connection) &body body)
   `(progn
-     (unless (eslack--connection-live-p eslack--buffer-connection)
-       (eslack--error "Cannot find this connection (%s) in global list of connections"
-                      (eslack--connection-name eslack--buffer-connection)))
-     ,@body))
+     (let* ((buffer (current-buffer))
+            (fn (lambda () ,@body))
+            (deadp (not (eslack--connection-live-p ,connection))))
+       (cond ((and deadp
+                   (y-or-n-p (format "%s is dead. Try re-connecting?"
+                                     (eslack--connection-name ,connection))))
+              (eslack (eslack--connection-token ,connection)
+                      (lambda (connection)
+                        (with-current-buffer buffer
+                          (setq-local eslack--buffer-connection connection)
+                          (funcall fn)
+                          (eslack--message "Reconnected to %s."
+                                           (eslack--connection-name connection))))))
+             (deadp
+              (eslack--message "%s is dead. Use \\[eslack] to start a new connection..."
+                               (eslack--connection-name ,connection)))
+             (t
+              (funcall fn))))))
 
 (defun eslack--websocket-send (connection message)
   (websocket-send-text (eslack--connection-websocket connection)
@@ -244,9 +258,14 @@ connection, then the first of the global connection list."
                              (clipboard-yank)
                              (buffer-string))))
 
-(defun eslack (token)
-  "Start an eslack connection to a server, identified by TOKEN"
-  (interactive (list (eslack--read-token)))
+(defun eslack (token &optional continuation)
+  "Start an eslack connection to a server, identified by TOKEN.
+Non-interactively, continuation is a function of a single
+argument, an `eslack--connection' called when everything goes OK."
+  (interactive (list (eslack--read-token)
+                     (lambda (connection)
+                       (eslack--message "Connected to %s.  Use \\[eslack-join-room] to start chatting"
+                                        (eslack--connection-name connection)))))
   (let ((sig (cl-gensym "eslack--")))
     (eslack--log-event `(:connection-attempt
                          .
@@ -271,7 +290,7 @@ connection, then the first of the global connection list."
          (search-forward "\n\n")
          (let ((state (json-read)))
            (setq eslack--last-state state)
-           (eslack--start-websockets state token)))))))
+           (eslack--start-websockets state token continuation)))))))
 
 (defun eslack--opened (connection)
   (eslack--debug "Connection to %s established" (eslack--connection-name connection))
@@ -360,7 +379,7 @@ CONNECTION can also be a string, the API token in use for this connection"
                         (eslack--keywordize (eslack--get payload 'subtype)))
                    payload)))
 
-(defun eslack--start-websockets (state token)
+(defun eslack--start-websockets (state token &optional continuation)
   (let ((url (eslack--get state 'url))
         (connection nil))
     (websocket-open url 
@@ -369,7 +388,9 @@ CONNECTION can also be a string, the API token in use for this connection"
                                                                :websocket ws
                                                                :token token
                                                                :state state))
-                               (eslack--opened connection))
+                               (eslack--opened connection)
+                               (when continuation
+                                 (funcall continuation connection)))
                     :on-message (lambda (_ws f)
                                   (eslack--process connection f))
                     :on-close (lambda (_ws)
@@ -564,7 +585,7 @@ CONNECTION can also be a string, the API token in use for this connection"
 (cl-defgeneric eslack--event (type message))
 
 (cl-defmethod eslack--event ((_type (eql :hello)) _subtype _message)
-  (eslack--message "%s says hello. Use \\[eslack-join-room] to start chatting" (eslack--connection-name)))
+  (eslack--debug "%s says hello." (eslack--connection-name)))
 
 (cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql nil)) message)
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
@@ -838,7 +859,7 @@ CONNECTION can also be a string, the API token in use for this connection"
   "A hash table integer -> sent message")
 
 (defun eslack--send-message (text)
-  (eslack--checking-connection
+  (eslack--checking-connection (eslack--buffer-connection)
    (let* ((id (cl-incf eslack--next-message-id))
           (message `((:text . ,text)
                      (:id . ,id)
@@ -862,17 +883,20 @@ CONNECTION can also be a string, the API token in use for this connection"
 (defvar eslack--last-typing-indicator-timestamp (current-time))
 
 (defun eslack--send-typing-indicator-maybe ()
-  (eslack--checking-connection
-   (unless (< (time-to-seconds
+  (unless (or
+           ;; silently discard if this buffer's connection is not live
+           ;; anymore
+           (not (eslack--connection-live-p eslack--buffer-connection))
+           (< (time-to-seconds
                (time-since
                 eslack--last-typing-indicator-timestamp))
-              3)
-     (let* ((id (cl-incf eslack--next-message-id))
-            (message `((:id . ,id)
-                       (:channel . ,(eslack--get eslack--buffer-room 'id))
-                       (:type . :typing))))
-       (eslack--websocket-send eslack--buffer-connection message)
-       (setq-local eslack--last-typing-indicator-timestamp (current-time))))))
+              3))
+    (let* ((id (cl-incf eslack--next-message-id))
+           (message `((:id . ,id)
+                      (:channel . ,(eslack--get eslack--buffer-room 'id))
+                      (:type . :typing))))
+      (eslack--websocket-send eslack--buffer-connection message)
+      (setq-local eslack--last-typing-indicator-timestamp (current-time)))))
 
 (defun eslack--property-regions (beg end property &optional predicate)
   "Search BEG and END for subregions with text property PROPERTY.
