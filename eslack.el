@@ -481,15 +481,23 @@ CONNECTION can also be a string, the API token in use for this connection"
 
 (defun eslack--insert-image (marker url)
   "Insert image of URL at MARKER.
-Do it immediately if it's cached, or schedule insertion for later."
+Do it immediately if it's cached, or schedule insertion for
+later.  If MARKER exists in a propertized region of
+`eslack--image-target', use that region, otherwise create a new
+region."
   (cl-flet ((insert-it
              (image marker)
              (with-current-buffer
                  (marker-buffer marker)
                (save-excursion
                  (goto-char marker)
-                 (let ((inhibit-read-only t))
-                   (insert (propertize "[avatar]" 'display image)))))))
+                 (let ((inhibit-read-only t)
+                       (end (and (get-text-property marker 'eslack--image-target)
+                                 (next-single-property-change marker 'eslack--image-target))))
+                   (if end
+                       (add-text-properties marker end `(display ,image))
+                       (insert (propertize "[image]" 'display image
+                                           'eslack--image-target 'eslack--synthesized))))))))
     (let ((res (gethash url eslack--image-cache)))
       (cond ((and (listp res)
                   (eq 'image (car res)))
@@ -583,7 +591,12 @@ Do it immediately if it's cached, or schedule insertion for later."
 
 ;;; Buttons
 ;;;
-(define-button-type 'eslack 'mouse-face 'highlight)
+(defface eslack-button-face
+  '((t (:inherit warning)))
+  "Used for eslack buttons"
+  :group 'eslack)
+
+(define-button-type 'eslack 'mouse-face 'highlight 'face 'eslack-button-face)
 
 (define-button-type 'eslack--user-reference :supertype 'eslack)
 
@@ -604,54 +617,65 @@ Do it immediately if it's cached, or schedule insertion for later."
    (decode-coding-string text 'utf-8)
    'fixedcase))
 
-(defun eslack--message-buttons (_message)
-  (let ((actions (list (eslack--button "[edit]" 'invisible t 'eslack--collapsable t)
-                       (eslack--button "[delete]" 'invisible t 'eslack--collapsable t)
-                       (eslack--button "[mark-unread]" 'invisible t 'eslack--collapsable t)
-                       (eslack--button "[add-reaction]" 'invisible t 'eslack--collapsable t)
-                       (eslack--button "[pin]" 'invisible t 'eslack--collapsable t)))
-        (expand (eslack--button "[+]" 'invisible nil 'action 'eslack--expand-message-buttons))
-        (collapse (eslack--button "[-]" 'invisible nil 'action 'eslack--collapse-message-buttons)))
-    (cl-list* expand
-              collapse
-              actions)))
+(defun eslack--message-buttons (message)
+  (cl-loop for (label . properties)
+           in '(("[edit]")
+                ("[delete]")
+                ("[mark-unread]")
+                ("[add-reaction]")
+                ("[pin]"))
+           collect (apply #'eslack--button label
+                          'eslack--collapsable t
+                          'eslack--message message
+                          properties)))
 
-(defun eslack--expand-message-buttons (_button &optional collapse-instead)
-  (cl-loop with inhibit-read-only = t
-           for (start end) in
-           (eslack--property-regions (line-beginning-position)
-                                     (line-end-position)
-                                     'eslack--collapsable)
-           do (add-text-properties start end `(invisible
-                                               ,(if collapse-instead t nil)))))
+(defun eslack--toggle-message-buttons (button)
+  (let* ((pos (next-single-property-change (button-start button) 'eslack--collapsable))
+         (state (get-char-property pos 'invisible))
+         (inhibit-read-only t)
+         (inhibit-point-motion-hooks t))
+    (save-excursion
+      (goto-char pos)
+      (add-text-properties (line-beginning-position)
+                           (1+ (line-end-position)) ; include newline
+                           `(skip
+                             ,(not state)
+                             invisible
+                             ,(not state))))))
 
-(defun eslack--collapse-message-buttons (button)
-  (eslack--expand-message-buttons button 'collapse-instead))
-
-(defun eslack--insert-message (user message own-p _pending &rest properties)
+(defun eslack--insert-message (user message _own-p _pending &rest properties)
   "Insert MESSAGE from USER"
   (let* ((message-text (eslack--get message 'text))
          (profile (ignore-errors
                     (eslack--get user 'profile 'image_24)))
          (avatar-marker))
 
-    (cond (own-p
-           (let ((inhibit-read-only t)
-                 (inhibit-point-motion-hooks t))
-             (goto-char lui-output-marker)
-             (insert (mapconcat #'identity (eslack--message-buttons message) " ")
-                     "\n")
-             (set-marker lui-output-marker (point)))))
     (setq avatar-marker (and profile
                              (copy-marker lui-output-marker)))
     (when profile
       (set-marker-insertion-type avatar-marker nil))
     (lui-insert (apply #'propertize
-                       (format "%s: %s"
+                       (format "%s%s: %s"
+                               (eslack--button "[?]"
+                                               'eslack--image-target t
+                                               'action 'eslack--toggle-message-buttons)
                                (propertize (eslack--get user 'name)
                                            'eslack--user user)
-                               (eslack--decode message-text))
+                               (propertize (eslack--decode message-text)
+                                           'eslack--message-text t))
                        properties))
+    (let ((inhibit-read-only t)
+          (inhibit-point-motion-hooks t))
+      (goto-char lui-output-marker)
+      (insert
+       (propertize (mapconcat #'identity
+                              `(,@(eslack--message-buttons message)
+                                "\n")
+                              " ")
+                   'skip t
+                   'invisible t))
+      (set-marker lui-output-marker (point)))
+    
     (when profile
       (eslack--insert-image avatar-marker profile))))
 
@@ -950,7 +974,8 @@ Do it immediately if it's cached, or schedule insertion for later."
      (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
        (eslack--log-event message connection :outgoing-wss)
-       (eslack--websocket-send connection message)))))
+       (eslack--websocket-send connection message))
+     (goto-char (point-max)))))
 
 (defvar eslack--last-typing-indicator-timestamp (current-time))
 
@@ -1000,7 +1025,7 @@ particular method is hack, albeit a pacific one."
             probe
           (with-current-buffer (marker-buffer start)
             (let ((inhibit-read-only t))
-              (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message)
+              (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message-text)
                        do (add-text-properties start end '(face eslack-own-message-face)))
               (remhash id eslack--awaiting-reply))))
       (eslack--debug "Ignoring reply for unknown sent message"))))
