@@ -580,6 +580,32 @@ CONNECTION can also be a string, the API token in use for this connection"
                                             (funcall on-success object))))))
 
 
+;;; Buttons
+;;;
+(define-button-type 'eslack 'mouse-face 'highlight)
+
+(define-button-type 'eslack--user-reference :supertype 'eslack)
+
+(cl-defun eslack--button (text &rest properties &key (type 'eslack) &allow-other-keys)
+  (apply #'make-text-button text nil 'type type properties))
+
+(defun eslack--decode (text)
+  (replace-regexp-in-string
+   "<@\\([^>|]+\\)|?.*>"
+   (lambda (match)
+     (let* ((user-id (match-string 1 match))
+            (probe
+             (cl-find user-id (eslack--users) :key (lambda (user)
+                                                     (eslack--get user 'id))
+                      :test #'string=)))
+       (eslack--button (if probe
+                           (format "@%s" (eslack--get probe 'name))
+                         match)
+                       :type 'eslack--user-reference)))
+   (decode-coding-string text 'utf-8)
+   'fixedcase))
+
+
 ;;; Event processing
 ;;;
 (cl-defgeneric eslack--event (type message))
@@ -599,7 +625,7 @@ CONNECTION can also be a string, the API token in use for this connection"
                      (format "%s: %s"
                              (propertize (eslack--get user 'name)
                                          'eslack--user user)
-                             (decode-coding-string (eslack--get message 'text) 'utf-8))
+                             (eslack--decode (eslack--get message 'text)))
                      'eslack--message message))
         (eslack--insert-image avatar-marker (eslack--get user 'profile 'image_24))))))
 
