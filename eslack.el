@@ -2,7 +2,9 @@
 
 ;; Copyright (C) 2015  João Távora
 
+;; Version: 0.1
 ;; Author: João Távora <joaotavora@gmail.com>
+;; Package-Requires: ((circe) (websocket))
 ;; Keywords: convenience, tools
 
 ;; This program is free software; you can redistribute it and/or modify
