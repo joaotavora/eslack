@@ -41,6 +41,7 @@
 (require 'json)
 (require 'eieio)
 (require 'cl-lib)
+(require 'hi-lock)
 
 
 ;;; Utils
@@ -89,6 +90,18 @@ OBJECT is an JSON alist"
   "Find PROP in sequence SEQ.
 SEQ is a JSON sequence."
   (cl-find prop seq :key (lambda (thing) (eslack--get thing key)) :test test))
+
+(cl-defun eslack--find-message (what &key (key 'ts) (test #'string=))
+  "Find a message containing WHAT in a buffer by KEY.
+KEY defaults to the 'ts. Returns the message and the two buffer
+positions that are its bounds"
+  (cl-loop for start = (point-min) then next
+           for next = (next-single-char-property-change start 'eslack--message)
+           for probe = (get-text-property next 'eslack--message)
+           for prop = (ignore-errors (eslack--get probe key))
+           when (and probe
+                     (funcall test what prop))
+           return (list probe next (next-single-char-property-change next 'eslack--message))))
 
 (defvar eslack-completing-read-function 'ido-completing-read)
 
@@ -529,7 +542,8 @@ region."
                                                (eslack--error
                                                 "Web API fail %s" data))))
   (let ((sig (cl-gensym "eslack--"))
-        (connection (eslack--connection)))
+        (connection (eslack--connection))
+        (buffer (current-buffer)))
     (eslack--log-event `((:url . ,url)
                          (:method . ,method)
                          (:sig . ,sig)
@@ -537,7 +551,8 @@ region."
                          (:params . ,params))
                        connection
                        :outgoing-http)
-    (let ((url-request-method (upcase (if (keywordp method)
+    (let ((url-show-status nil)
+          (url-request-method (upcase (if (keywordp method)
                                           (substring (symbol-name method) 1)
                                         (symbol-name method))))
           (url-request-extra-headers (if json-params
@@ -561,7 +576,8 @@ region."
                                              :incoming-http)
                           (let ((oops (plist-get status :error)))
                             (cond (oops
-                                   (funcall on-error status))
+                                   (with-current-buffer
+                                       buffer (funcall on-error status)))
                                   ((plist-get status :redirect)
                                    (eslack--web-request (plist-get status :redirect) method :json-params params
                                                         :params params
@@ -574,9 +590,10 @@ region."
                                                           (:json . ,object))
                                                         connection
                                                         :incoming-http-success)
-                                     (funcall on-success status object))))))))))
+                                     (with-current-buffer buffer
+                                       (funcall on-success status object)))))))))))
 
-(defun eslack--post (method params on-success)
+(cl-defun eslack--post (method params on-success &optional on-error)
   (eslack--web-request (format "https://slack.com/api/%s"
                                (substring (symbol-name method) 1))
                        :post
@@ -584,9 +601,11 @@ region."
                                        params)
                        :on-success (lambda (_status object)
                                      (cond ((eq (eslack--get object 'ok) :json-false)
-                                            (eslack--error "posting to %s returned: %s"
+                                            (if on-error
+                                                (funcall on-error object)
+                                              (eslack--error "posting to %s returned: %s"
                                                            method
-                                                           (eslack--get object 'error)))
+                                                           (eslack--get object 'error))))
                                            (t
                                             (funcall on-success object))))))
 
@@ -621,14 +640,16 @@ region."
 
 (defun eslack--message-buttons (message)
   (cl-loop for (label . properties)
-           in '(("[edit]")
-                ("[delete]")
-                ("[mark-unread]")
-                ("[add-reaction]")
-                ("[pin]"))
+           in '(("[edit]" action eslack-edit-message)
+                ("[delete]" action eslack-delete-message)
+                ("[mark-unread]" action eslack-mark-message-unread)
+                ("[add-reaction]" action eslack-add-reaction-to-message)
+                ("[pin]" action eslack-pin-message)
+                ("[star]" action eslack-star-message))
            collect (apply #'eslack--button label
                           'eslack--collapsable t
                           'eslack--message message
+                          'mouse-action (cl-getf properties 'action)
                           properties)))
 
 (defun eslack--toggle-message-buttons (button)
@@ -647,25 +668,23 @@ region."
 
 (defun eslack--insert-message (user message _own-p _pending &rest properties)
   "Insert MESSAGE from USER"
-  (let* ((message-text (eslack--get message 'text))
+  (let* ((properties `(eslack--message ,message ,@properties))
+         (message-text (eslack--get message 'text))
          (profile (ignore-errors
                     (eslack--get user 'profile 'image_24)))
          (avatar-marker))
 
-    (setq avatar-marker (and profile
-                             (copy-marker lui-output-marker)))
+    (setq avatar-marker (copy-marker lui-output-marker))
     (when profile
       (set-marker-insertion-type avatar-marker nil))
-    (lui-insert (apply #'propertize
-                       (format "%s%s: %s"
-                               (eslack--button "[?]"
-                                               'eslack--image-target t
-                                               'action 'eslack--toggle-message-buttons)
-                               (propertize (eslack--get user 'name)
-                                           'eslack--user user)
-                               (propertize (eslack--decode message-text)
-                                           'eslack--message-text t))
-                       properties))
+    (lui-insert (format "%s%s: %s"
+                        (eslack--button "[?]"
+                                        'eslack--image-target t
+                                        'action 'eslack--toggle-message-buttons)
+                        (propertize (eslack--get user 'name)
+                                    'eslack--user user)
+                        (propertize (eslack--decode message-text)
+                                    'eslack--message-text t)))
     (let ((inhibit-read-only t)
           (inhibit-point-motion-hooks t))
       (goto-char lui-output-marker)
@@ -676,10 +695,44 @@ region."
                               " ")
                    'skip t
                    'invisible t))
-      (set-marker lui-output-marker (point)))
+      (set-marker lui-output-marker (point))
+      (add-text-properties avatar-marker
+                           (point)
+                           properties))
     
     (when profile
       (eslack--insert-image avatar-marker profile))))
+
+;;; Message actions
+;;;
+(cl-defmacro eslack--define-message-action (name (message beg end) &optional docstring &body body)
+  (declare (indent defun)
+           (debug (&define name lambda-list
+                           form
+                           def-body)))
+  `(defun ,name (&optional button)
+     ,@(if (stringp docstring)
+           (list docstring)
+         (setq body
+               (cons docstring body))
+         nil)
+     (interactive)
+     (let* ((pos (if button (button-start button) (point)))
+            (,message (get-text-property pos 'eslack--message))
+            (,beg (previous-single-char-property-change pos 'eslack--message))
+            (,end (next-single-char-property-change pos 'eslack--message)))
+       ,@body)))
+
+(eslack--define-message-action eslack-star-message (message beg end)
+  "Star the message at point."
+  (eslack--post :stars.add
+                `((channel . ,(eslack--get message 'channel))
+                  (timestamp . ,(eslack--get message 'ts)))
+                (lambda (object)
+                  (let ((overlay (make-overlay beg end))
+                        (inhibit-read-only t))
+                    (overlay-put overlay 'face 'hi-pink)
+                    (add-text-properties beg end `(eslack--message-overlay ,overlay))))))
 
 
 ;;; Event processing
@@ -698,8 +751,7 @@ region."
         (eslack--insert-message user
                                 message
                                 nil
-                                nil
-                                'eslack--message message)))))
+                                nil)))))
 
 (cl-defmethod eslack--event ((_type (eql :message)) subtype message)
   (eslack--debug "subtype %s of message is unimplemented: %s" subtype message))
@@ -872,9 +924,21 @@ region."
   "A new team member has joined"
   (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((type (eql :star-added)) _subtype message)
+(cl-defmethod eslack--event ((_type (eql :star-added)) _subtype frame)
   "A team member has starred an item"
-  (eslack--debug "%s is unimplemented: %s" type message))
+  ;; Calling the last argument "FRAME" here to avoid confusion
+  (let ((item (eslack--get frame 'item))
+        (message (ignore-errors (eslack--get 'item 'message))))
+    (cond (message
+           (cl-destructuring-bind (&optional message start end)
+               (eslack--find-message (eslack--get message 'ts))
+             (let ((overlay (and message
+                                 (get-char-property start 'eslack--message-overlay))))
+               (when overlay
+                 (overlay-put overlay 'face 'hi-yellow)
+                 (add-text-properties start end `(eslack--message ,message))))))
+          (t
+           (eslack--warning "A user has starred something else %s..." frame)))))
 
 (cl-defmethod eslack--event ((type (eql :star-removed)) _subtype message)
   "A team member removed a star"
@@ -960,9 +1024,9 @@ region."
   (eslack--checking-connection (eslack--buffer-connection)
    (let* ((id (cl-incf eslack--next-message-id))
           (message `((text . ,text)
-                     (:id . ,id)
-                     (:channel . ,(eslack--get eslack--buffer-room 'id))
-                     (:type . :message)))
+                     (id . ,id)
+                     (channel . ,(eslack--get eslack--buffer-room 'id))
+                     (type . :message)))
           (start (copy-marker lui-output-marker))
           end)
      (set-marker-insertion-type lui-output-marker nil)
@@ -970,8 +1034,7 @@ region."
                                            (eslack--users))
                              message
                              'own
-                             'pending
-                             'eslack--message message)
+                             'pending)
      (setq end (copy-marker lui-output-marker))
      (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
@@ -991,9 +1054,9 @@ region."
                 eslack--last-typing-indicator-timestamp))
               3))
     (let* ((id (cl-incf eslack--next-message-id))
-           (message `((:id . ,id)
-                      (:channel . ,(eslack--get eslack--buffer-room 'id))
-                      (:type . :typing))))
+           (message `((id . ,id)
+                      (channel . ,(eslack--get eslack--buffer-room 'id))
+                      (type . :typing))))
       (eslack--websocket-send eslack--buffer-connection message)
       (setq-local eslack--last-typing-indicator-timestamp (current-time)))))
 
@@ -1016,19 +1079,23 @@ PREDICATE. PREDICATE defaults to `identity'"
                      (not (funcall predicate next-value)))
            collect (list start next)))
 
-(cl-defmethod eslack--event ((_type (eql :reply-to)) _subtype message)
+(cl-defmethod eslack--event ((_type (eql :reply-to)) _subtype reply-to-message)
   "Handle Slack's confirmation to a sent message.
 The `reply-to' type doesn't really exist in the Slack API, this
 particular method is hack, albeit a pacific one."
-  (let* ((id (eslack--get message 'reply_to))
+  (let* ((id (eslack--get reply-to-message 'reply_to))
          (probe (gethash id eslack--awaiting-reply)))
     (if probe
-        (cl-destructuring-bind (_message start end)
+        (cl-destructuring-bind (message start end)
             probe
           (with-current-buffer (marker-buffer start)
             (let ((inhibit-read-only t))
+              (add-text-properties start end
+                                   `(eslack--message ((ts . ,(eslack--get reply-to-message 'ts))
+                                                      ,@message)))
               (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message-text)
-                       do (add-text-properties start end '(face eslack-own-message-face)))
+                       do (add-text-properties start end
+                                               `(face eslack-own-message-face)))
               (remhash id eslack--awaiting-reply))))
       (eslack--debug "Ignoring reply for unknown sent message"))))
 
