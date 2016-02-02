@@ -604,12 +604,46 @@ Do it immediately if it's cached, or schedule insertion for later."
    (decode-coding-string text 'utf-8)
    'fixedcase))
 
-(defun eslack--insert-message (user message-text &rest properties)
-  "Insert raw MESSAGE-TEXT from USER"
-  (let* ((profile (ignore-errors
+(defun eslack--message-buttons (_message)
+  (let ((actions (list (eslack--button "[edit]" 'invisible t 'eslack--collapsable t)
+                       (eslack--button "[delete]" 'invisible t 'eslack--collapsable t)
+                       (eslack--button "[mark-unread]" 'invisible t 'eslack--collapsable t)
+                       (eslack--button "[add-reaction]" 'invisible t 'eslack--collapsable t)
+                       (eslack--button "[pin]" 'invisible t 'eslack--collapsable t)))
+        (expand (eslack--button "[+]" 'invisible nil 'action 'eslack--expand-message-buttons))
+        (collapse (eslack--button "[-]" 'invisible nil 'action 'eslack--collapse-message-buttons)))
+    (cl-list* expand
+              collapse
+              actions)))
+
+(defun eslack--expand-message-buttons (_button &optional collapse-instead)
+  (cl-loop with inhibit-read-only = t
+           for (start end) in
+           (eslack--property-regions (line-beginning-position)
+                                     (line-end-position)
+                                     'eslack--collapsable)
+           do (add-text-properties start end `(invisible
+                                               ,(if collapse-instead t nil)))))
+
+(defun eslack--collapse-message-buttons (button)
+  (eslack--expand-message-buttons button 'collapse-instead))
+
+(defun eslack--insert-message (user message own-p _pending &rest properties)
+  "Insert MESSAGE from USER"
+  (let* ((message-text (eslack--get message 'text))
+         (profile (ignore-errors
                     (eslack--get user 'profile 'image_24)))
-         (avatar-marker (and profile
-                             (copy-marker lui-output-marker))))
+         (avatar-marker))
+
+    (cond (own-p
+           (let ((inhibit-read-only t)
+                 (inhibit-point-motion-hooks t))
+             (goto-char lui-output-marker)
+             (insert (mapconcat #'identity (eslack--message-buttons message) " ")
+                     "\n")
+             (set-marker lui-output-marker (point)))))
+    (setq avatar-marker (and profile
+                             (copy-marker lui-output-marker)))
     (when profile
       (set-marker-insertion-type avatar-marker nil))
     (lui-insert (apply #'propertize
@@ -636,7 +670,9 @@ Do it immediately if it's cached, or schedule insertion for later."
       (tracking-add-buffer (current-buffer))
       (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
         (eslack--insert-message user
-                                (eslack--get message 'text)
+                                message
+                                nil
+                                nil
                                 'eslack--message message)))))
 
 (cl-defmethod eslack--event ((_type (eql :message)) subtype message)
@@ -897,7 +933,7 @@ Do it immediately if it's cached, or schedule insertion for later."
 (defun eslack--send-message (text)
   (eslack--checking-connection (eslack--buffer-connection)
    (let* ((id (cl-incf eslack--next-message-id))
-          (message `((:text . ,text)
+          (message `((text . ,text)
                      (:id . ,id)
                      (:channel . ,(eslack--get eslack--buffer-room 'id))
                      (:type . :message)))
@@ -906,9 +942,10 @@ Do it immediately if it's cached, or schedule insertion for later."
      (set-marker-insertion-type lui-output-marker nil)
      (eslack--insert-message (eslack--find (eslack--get (eslack--self) 'id)
                                            (eslack--users))
-                             text
-                             'eslack--message message
-                             'face 'eslack-pending-message-face)
+                             message
+                             'own
+                             'pending
+                             'eslack--message message)
      (setq end (copy-marker lui-output-marker))
      (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
