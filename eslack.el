@@ -225,17 +225,16 @@ STATE is a JSON alist returned by the server on first contact."))
       (goto-char p)
       (pop-to-buffer (current-buffer)))))
 
-(eval-and-compile
-  (defmacro eslack--define-connection-accessors ()
-    `(progn
-       ,@(cl-loop for prop in '(users channels groups ims bots)
-                  collect `(cl-defun ,(intern (concat "eslack--" (symbol-name prop)))
-                               (&optional (connection (eslack--connection)))
-                             ,(format "Retrieve CONNECTION's %S" prop)
-                             (let ((state (eslack--connection-state connection)))
-                               (eslack--get state ',prop))))))
+(defmacro eslack--define-connection-accessors ()
+  `(progn
+     ,@(cl-loop for prop in '(self users channels groups ims bots)
+                collect `(cl-defun ,(intern (concat "eslack--" (symbol-name prop)))
+                             (&optional (connection (eslack--connection)))
+                           ,(format "Retrieve CONNECTION's %S" prop)
+                           (let ((state (eslack--connection-state connection)))
+                             (eslack--get state ',prop))))))
 
-  (eslack--define-connection-accessors))
+(eslack--define-connection-accessors)
 
 (defun eslack--connection ()
   "Current connection.
@@ -481,6 +480,8 @@ CONNECTION can also be a string, the API token in use for this connection"
 (defvar eslack--image-cache (make-hash-table :test #'equal))
 
 (defun eslack--insert-image (marker url)
+  "Insert image of URL at MARKER.
+Do it immediately if it's cached, or schedule insertion for later."
   (cl-flet ((insert-it
              (image marker)
              (with-current-buffer
@@ -595,15 +596,30 @@ CONNECTION can also be a string, the API token in use for this connection"
    (lambda (match)
      (let* ((user-id (match-string 1 match))
             (probe
-             (cl-find user-id (eslack--users) :key (lambda (user)
-                                                     (eslack--get user 'id))
-                      :test #'string=)))
+             (eslack--find user-id (eslack--users))))
        (eslack--button (if probe
                            (format "@%s" (eslack--get probe 'name))
                          match)
                        :type 'eslack--user-reference)))
    (decode-coding-string text 'utf-8)
    'fixedcase))
+
+(defun eslack--insert-message (user message-text &rest properties)
+  "Insert raw MESSAGE-TEXT from USER"
+  (let* ((profile (ignore-errors
+                    (eslack--get user 'profile 'image_24)))
+         (avatar-marker (and profile
+                             (copy-marker lui-output-marker))))
+    (when profile
+      (set-marker-insertion-type avatar-marker nil))
+    (lui-insert (apply #'propertize
+                       (format "%s: %s"
+                               (propertize (eslack--get user 'name)
+                                           'eslack--user user)
+                               (eslack--decode message-text))
+                       properties))
+    (when profile
+      (eslack--insert-image avatar-marker profile))))
 
 
 ;;; Event processing
@@ -618,16 +634,10 @@ CONNECTION can also be a string, the API token in use for this connection"
     (eslack--with-room-buffer ((eslack--connection) room)
       ;; (pop-to-buffer (current-buffer))
       (tracking-add-buffer (current-buffer))
-      (let ((user (eslack--find (eslack--get message 'user) (eslack--users)))
-            (avatar-marker (copy-marker lui-output-marker)))
-        (set-marker-insertion-type avatar-marker nil)
-        (lui-insert (propertize
-                     (format "%s: %s"
-                             (propertize (eslack--get user 'name)
-                                         'eslack--user user)
-                             (eslack--decode (eslack--get message 'text)))
-                     'eslack--message message))
-        (eslack--insert-image avatar-marker (eslack--get user 'profile 'image_24))))))
+      (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
+        (eslack--insert-message user
+                                (eslack--get message 'text)
+                                'eslack--message message)))))
 
 (cl-defmethod eslack--event ((_type (eql :message)) subtype message)
   (eslack--debug "subtype %s of message is unimplemented: %s" subtype message))
@@ -894,12 +904,11 @@ CONNECTION can also be a string, the API token in use for this connection"
           (start (copy-marker lui-output-marker))
           end)
      (set-marker-insertion-type lui-output-marker nil)
-     (lui-insert (propertize
-                  (format "%s: %s"
-                          "me"
-                          text)
-                  'eslack--message message
-                  'face 'eslack-pending-message-face))
+     (eslack--insert-message (eslack--find (eslack--get (eslack--self) 'id)
+                                           (eslack--users))
+                             text
+                             'eslack--message message
+                             'face 'eslack-pending-message-face)
      (setq end (copy-marker lui-output-marker))
      (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
