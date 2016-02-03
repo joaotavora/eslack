@@ -78,9 +78,13 @@
 (defun eslack--put (object key value)
   "Put a KEY-VALUE pair in OBJECT.
 Don't invalidate other references to object."
-  (let ((temp (cons (car object) (cdr object))))
-    (setcdr object temp)
-    (setcar object (cons key value))))
+  (let* ((existing (assoc key object))
+         (temp (and (not existing)
+                    (cons (car object) (cdr object)))))
+    (if existing
+        (setcdr existing value)
+      (setcdr object temp)
+      (setcar object (cons key value)))))
 
 (defun eslack--get (object key &rest more)
   "Search OBJECT for the value of KEY.
@@ -717,33 +721,32 @@ region."
    (decode-coding-string text 'utf-8)
    'fixedcase))
 
+(defun eslack--starred-p (message)
+  (and
+   (eslack--has message 'is_starred)
+   (eslack--get message 'is_starred)))
+
 (defun eslack--message-buttons (message)
   (cl-loop for (label . properties)
-           in '(("[edit]" action eslack-edit-message)
+           in `(("[edit]" action eslack-edit-message)
                 ("[delete]" action eslack-delete-message)
                 ("[mark-unread]" action eslack-mark-message-unread)
                 ("[add-reaction]" action eslack-add-reaction-to-message)
                 ("[pin]" action eslack-pin-message)
-                ("[star]" action eslack-star-message eslack--star-button t))
+                ,@(if (eslack--starred-p message)
+                      '(("[unstar]" action eslack-unstar-message))
+                    '(("[star]" action eslack-star-message))))
            collect (apply #'eslack--button label
-                          'eslack--collapsable t
                           'eslack--message message
                           'mouse-action (cl-getf properties 'action)
                           properties)))
 
 (defun eslack--toggle-message-buttons (button)
-  (let* ((pos (next-single-property-change (button-start button) 'eslack--collapsable))
-         (state (get-char-property pos 'invisible))
-         (inhibit-read-only t)
-         (inhibit-point-motion-hooks t))
-    (save-excursion
-      (goto-char pos)
-      (add-text-properties (line-beginning-position)
-                           (1+ (line-end-position)) ; include newline
-                           `(skip
-                             ,(not state)
-                             invisible
-                             ,(not state))))))
+  (let* ((message (get-text-property button 'eslack--message))
+         (buttons-visible-p
+          (eslack--get message 'eslack--buttons-visible-p)))
+    (eslack--put message 'eslack--buttons-visible-p (not buttons-visible-p))
+    (eslack--update-message-decorations message)))
 
 (defun eslack--message-overlay (message)
   (eslack--get message 'eslack--overlay))
@@ -762,8 +765,8 @@ properties to it"
          (message-text (eslack--get message 'text))
          (profile (ignore-errors
                     (eslack--get user 'profile 'image_24)))
-         (start (copy-marker lui-output-marker)))
-
+         (start (copy-marker lui-output-marker))
+         (lom lui-output-marker))
     (set-marker-insertion-type start nil)
     (lui-insert (format "%s%s: %s"
                         (eslack--button "[?]"
@@ -774,40 +777,42 @@ properties to it"
                                     'eslack--message-text t)))
     (let ((inhibit-read-only t)
           (inhibit-point-motion-hooks t))
-      (goto-char lui-output-marker)
-      (insert
-       (propertize (mapconcat #'identity
-                              `(,@(eslack--message-buttons message)
-                                "\n")
-                              " ")
-                   'skip t
-                   'invisible t
-                   'read-only t))
-      (set-marker lui-output-marker (point))
-
-      (eslack--put message 'eslack--overlay
-                   (make-overlay start (point) nil t nil))
       (add-text-properties start
-                           (point)
+                           lom
                            properties)
-      (eslack--update-message message))
+      (eslack--put message 'eslack--overlay
+                   (make-overlay start lom nil t nil))
+      (eslack--put message 'eslack--decorations
+                   (copy-marker lom))
+      (eslack--put message 'eslack--buttons-visible-p
+                   (ignore-errors (eslack--get message 'eslack--buttons-visible-p)))
+      (eslack--update-message-decorations message))
     (when profile
       (eslack--insert-image start profile))))
 
-(defun eslack--update-message (message)
-  (cond
-   ((and
-     (eslack--has message 'is_starred)
-     (eslack--get message 'is_starred))
-    ;; Message is starred
-    ;;
-    (overlay-put (eslack--message-overlay message) 'face 'hi-yellow)
-    (eslack--toggle-star-button message "unstar" 'eslack-unstar-message))
-   (t
-    ;; Message is unstarred
-    ;; 
-    (overlay-put (eslack--message-overlay message) 'face nil)
-    (eslack--toggle-star-button message "star" 'eslack-star-message))))
+(defun eslack--update-message-decorations (message)
+  (let ((inhibit-read-only t)
+        (dec-marker (eslack--get message 'eslack--decorations))
+        (lom lui-output-marker))
+    (unwind-protect
+        (save-excursion
+          (set-marker-insertion-type lom t)
+          (delete-region dec-marker
+                         (eslack--message-end message))
+          (overlay-put (eslack--message-overlay message) 'face nil)
+          (goto-char dec-marker)
+          (when (eslack--starred-p message)
+            (overlay-put (eslack--message-overlay message) 'face 'hi-yellow))
+          (when (eslack--get message 'eslack--buttons-visible-p)
+            (insert
+             (mapconcat #'identity
+                        `(,@(eslack--message-buttons message)
+                          "\n")
+                        " ")))
+          (move-overlay (eslack--message-overlay message)
+                        (eslack--message-start message)
+                        (point)))
+      (set-marker-insertion-type lom nil))))
 
 ;;; Message actions
 ;;;
@@ -852,32 +857,9 @@ properties to it"
     (cond (cur-message
            (eslack--put cur-message 'is_starred
                         (ignore-errors (eslack--get in-message 'is_starred)))
-           (eslack--update-message cur-message))
+           (eslack--update-message-decorations cur-message))
           (t
            (eslack--warning "A user has changed stars on some unsupported item %s..." item)))))
-
-(defun eslack--toggle-star-button (message newtitle newaction)
-  (let ((inhibit-read-only t)
-        (inhibit-point-motion-hooks t)
-        (add-star-button
-         (cl-loop for start = (eslack--message-start message) then next
-                  for probe = (get-text-property start 'eslack--star-button)
-                  for next = (next-single-property-change start 'eslack--star-button
-                                                          nil
-                                                          (eslack--message-end message))
-                  when probe return start
-                  while (not (= next (eslack--message-end message))))))
-    (when add-star-button
-      (save-excursion
-        (goto-char (1+ (button-start add-star-button)))
-        (let ((properties (text-properties-at (button-start add-star-button)))
-              (marker (copy-marker (button-end add-star-button))))
-          (delete-region (point) (1- (button-end add-star-button)))
-          (insert newtitle)
-          (set-text-properties (button-start add-star-button)
-                               marker properties)
-          (button-put add-star-button 'action newaction)
-          (button-put add-star-button 'mouse-action newaction))))))
 
 (eslack--define-message-action eslack-star-message (message)
   "Star the message at point."
