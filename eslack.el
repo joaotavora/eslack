@@ -73,6 +73,13 @@
            do (eslack--error "can't find %s in %s" key a)
            finally return res))
 
+(defun eslack--put (object key value)
+  "Put a KEY-VALUE pair in OBJECT.
+Don't invalidate other references to object."
+  (let ((temp (cons (car object) (cdr object))))
+    (setcdr object temp)
+    (setcar object (cons key value))))
+
 (defun eslack--get (object key &rest more)
   "Search OBJECT for the value of KEY.
 OBJECT is an JSON alist"
@@ -81,6 +88,17 @@ OBJECT is an JSON alist"
 (defun eslack--has (object key)
   "Check if OBJECT has KEY"
   (assoc key object))
+
+(defun eslack--merge (object new-object)
+  "Update OBJECT with NEW-OBJECT properties,
+but keep any OBJECT's properties that new-object doesn't have.
+Also don't invalidate any references to object"
+  (let ((extra (cl-loop for (key . value) in object
+                        unless (eslack--has new-object key)
+                        collect (cons key value))))
+  (setcar object (car new-object))
+  (setcdr object (append (cdr new-object)
+                         extra))))
 
 (gv-define-setter eslack--get (value object &rest more)
   `(setcdr (eslack--get-internal ,object (list ,@more))
@@ -93,15 +111,15 @@ SEQ is a JSON sequence."
 
 (cl-defun eslack--find-message (what &key (key 'ts) (test #'string=))
   "Find a message containing WHAT in a buffer by KEY.
-KEY defaults to the 'ts. Returns the message and the two buffer
-positions that are its bounds"
+KEY defaults to the 'ts."
   (cl-loop for start = (point-min) then next
-           for next = (next-single-char-property-change start 'eslack--message)
-           for probe = (get-text-property next 'eslack--message)
+           for probe = (get-text-property start 'eslack--message)
+           for next = (next-single-property-change start 'eslack--message)
+           while next
            for prop = (ignore-errors (eslack--get probe key))
            when (and probe
                      (funcall test what prop))
-           return (list probe next (next-single-char-property-change next 'eslack--message))))
+           return probe))
 
 (defvar eslack-completing-read-function 'ido-completing-read)
 
@@ -207,9 +225,16 @@ STATE is a JSON alist returned by the server on first contact."))
              (t
               (funcall fn))))))
 
+(defun eslack--specific-symbol-p (key)
+  (string-match "^eslack-" (symbol-name key)))
+
 (defun eslack--websocket-send (connection message)
-  (websocket-send-text (eslack--connection-websocket connection)
-                       (json-encode message)))
+  (let ((stripped (cl-loop for (key . value) in message
+                           unless (eslack--specific-symbol-p key)
+                           collect (cons key value))))
+    (eslack--log-event stripped connection :outgoing-wss)
+    (websocket-send-text (eslack--connection-websocket connection)
+                         (json-encode stripped))))
 
 (defun eslack-list-connections ()
   (interactive)
@@ -599,9 +624,9 @@ region."
                                      (cond ((eq (eslack--get object 'ok) :json-false)
                                             (if on-error
                                                 (funcall on-error object)
-                                              (eslack--error "posting to %s returned: %s"
-                                                           method
-                                                           (eslack--get object 'error))))
+                                              (eslack--warning "posting to %s returned: %s"
+                                                               method
+                                                               (eslack--get object 'error))))
                                            (t
                                             (funcall on-success object))))))
 
@@ -662,17 +687,26 @@ region."
                              invisible
                              ,(not state))))))
 
+(defun eslack--message-overlay (message)
+  (eslack--get message 'eslack--overlay))
+
+(defun eslack--message-start (message)
+  (overlay-start (eslack--message-overlay message)))
+
+(defun eslack--message-end (message)
+  (overlay-end (eslack--message-overlay message)))
+
 (defun eslack--insert-message (user message _own-p _pending &rest properties)
-  "Insert MESSAGE from USER"
+  "Insert MESSAGE from USER.
+Destructively modifies MESSAGE and adds some `eslack'-specific
+properties to it"
   (let* ((properties `(eslack--message ,message ,@properties))
          (message-text (eslack--get message 'text))
          (profile (ignore-errors
                     (eslack--get user 'profile 'image_24)))
-         (avatar-marker))
+         (start (copy-marker lui-output-marker)))
 
-    (setq avatar-marker (copy-marker lui-output-marker))
-    (when profile
-      (set-marker-insertion-type avatar-marker nil))
+    (set-marker-insertion-type start nil)
     (lui-insert (format "%s%s: %s"
                         (eslack--button "[?]"
                                         'eslack--image-target t
@@ -692,16 +726,19 @@ region."
                    'skip t
                    'invisible t))
       (set-marker lui-output-marker (point))
-      (add-text-properties avatar-marker
+
+      (eslack--put message 'eslack--overlay
+                   (make-overlay start (point) nil t nil))
+      (add-text-properties start
                            (point)
                            properties))
     
     (when profile
-      (eslack--insert-image avatar-marker profile))))
+      (eslack--insert-image start profile))))
 
 ;;; Message actions
 ;;;
-(cl-defmacro eslack--define-message-action (name (message beg end) &optional docstring &body body)
+(cl-defmacro eslack--define-message-action (name (message) &optional docstring &body body)
   (declare (indent defun)
            (debug (&define name lambda-list
                            form
@@ -714,21 +751,33 @@ region."
          nil)
      (interactive)
      (let* ((pos (if button (button-start button) (point)))
-            (,message (get-text-property pos 'eslack--message))
-            (,beg (previous-single-char-property-change pos 'eslack--message))
-            (,end (next-single-char-property-change pos 'eslack--message)))
+            (,message (get-text-property pos 'eslack--message)))
        ,@body)))
 
-(eslack--define-message-action eslack-star-message (message beg end)
+(defun eslack--handle-star-change (frame)
+  ;; Calling the arg "FRAME" here to avoid confusion
+  (let* ((item (eslack--get frame 'item))
+         (in-message (ignore-errors (eslack--get item 'message)))
+         (cur-message (and in-message
+                           (eslack--find-message (eslack--get in-message 'ts)))))
+    (cond (cur-message
+           ;; (eslack--merge cur-message in-message)
+           ;; (eslack--put cur-message 'is_starred
+           ;;              (ignore-errors (eslack--get in-message 'is_starred)))
+           (if (ignore-errors (eslack--get in-message 'is_starred)) 
+               (overlay-put (eslack--message-overlay cur-message) 'face 'hi-yellow)
+               (overlay-put (eslack--message-overlay cur-message) 'face nil)))
+          (t
+           (eslack--warning "A user has changed stars on some unsupported item %s..." item)))))
+
+(eslack--define-message-action eslack-star-message (message)
   "Star the message at point."
   (eslack--post :stars.add
                 `((channel . ,(eslack--get message 'channel))
                   (timestamp . ,(eslack--get message 'ts)))
-                (lambda (object)
-                  (let ((overlay (make-overlay beg end))
-                        (inhibit-read-only t))
-                    (overlay-put overlay 'face 'hi-pink)
-                    (add-text-properties beg end `(eslack--message-overlay ,overlay))))))
+                (lambda (_object)
+                  ;; (overlay-put (eslack--message-overlay message) 'face 'hi-pink)
+                  )))
 
 
 ;;; Event processing
@@ -920,25 +969,13 @@ region."
   "A new team member has joined"
   (eslack--debug "%s is unimplemented: %s" type message))
 
-(cl-defmethod eslack--event ((_type (eql :star-added)) _subtype frame)
+(cl-defmethod eslack--event ((_type (eql :star-added)) _subtype message)
   "A team member has starred an item"
-  ;; Calling the last argument "FRAME" here to avoid confusion
-  (let ((item (eslack--get frame 'item))
-        (message (ignore-errors (eslack--get 'item 'message))))
-    (cond (message
-           (cl-destructuring-bind (&optional message start end)
-               (eslack--find-message (eslack--get message 'ts))
-             (let ((overlay (and message
-                                 (get-char-property start 'eslack--message-overlay))))
-               (when overlay
-                 (overlay-put overlay 'face 'hi-yellow)
-                 (add-text-properties start end `(eslack--message ,message))))))
-          (t
-           (eslack--warning "A user has starred something else %s..." frame)))))
+  (eslack--handle-star-change message))
 
-(cl-defmethod eslack--event ((type (eql :star-removed)) _subtype message)
+(cl-defmethod eslack--event ((_type (eql :star-removed)) _subtype message)
   "A team member removed a star"
-  (eslack--debug "%s is unimplemented: %s" type message))
+  (eslack--handle-star-change message))
 
 (cl-defmethod eslack--event ((type (eql :reaction-added)) _subtype message)
   "A team member has added an emoji reaction to an item"
@@ -1034,7 +1071,6 @@ region."
      (setq end (copy-marker lui-output-marker))
      (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
-       (eslack--log-event message connection :outgoing-wss)
        (eslack--websocket-send connection message))
      (goto-char (point-max)))))
 
