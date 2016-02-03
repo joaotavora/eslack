@@ -896,7 +896,8 @@ properties to it"
   "Delete the message at point"
   (eslack--post :chat.delete
                 `((channel . ,(eslack--get message 'channel))
-                  (timestamp . ,(eslack--get message 'ts)))))
+                  ;; "ts" NOT "timestamp"
+                  (ts . ,(eslack--get message 'ts)))))
 
 
 ;;; Event processing
