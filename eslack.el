@@ -638,7 +638,14 @@ region."
   "Used for eslack buttons"
   :group 'eslack)
 
-(define-button-type 'eslack 'mouse-face 'highlight 'face 'eslack-button-face)
+(define-button-type 'eslack
+  'mouse-face 'highlight
+  'face 'eslack-button-face
+  'help-echo "Push with mouse-1 or RET"
+  'keymap (let ((map (make-sparse-keymap)))
+            (set-keymap-parent map button-map)
+            (define-key map [mouse-1] 'push-button)
+            map))
 
 (define-button-type 'eslack--user-reference :supertype 'eslack)
 
@@ -799,7 +806,8 @@ properties to it"
           (insert newtitle)
           (set-text-properties (button-start add-star-button)
                                marker properties)
-          (button-put add-star-button 'action newaction))))))
+          (button-put add-star-button 'action newaction)
+          (button-put add-star-button 'mouse-action newaction))))))
 
 (eslack--define-message-action eslack-star-message (message)
   "Star the message at point."
