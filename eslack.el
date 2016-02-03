@@ -977,6 +977,7 @@ Interactively, should only be called in `eslack-edit' buffers."
                                                     (let ((inhibit-read-only t))
                                                       (delete-region start end)
                                                       (let ((saved-marker lui-output-marker))
+                                                        (set-marker-insertion-type saved-marker t)
                                                         (unwind-protect 
                                                             (save-excursion
                                                               (setq lui-output-marker (copy-marker start))
@@ -989,6 +990,7 @@ Interactively, should only be called in `eslack-edit' buffers."
                                                                nil
                                                                nil
                                                                'eslack--edited t))
+                                                          (set-marker-insertion-type saved-marker nil)
                                                           (setq lui-output-marker saved-marker))))))))
                 (t
                  (eslack--debug "Someone edited a message that I couldn't find: %s"
