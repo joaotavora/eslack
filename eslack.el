@@ -687,6 +687,15 @@ region."
 
 (define-button-type 'eslack--user-reference :supertype 'eslack)
 
+(define-button-type 'eslack--avatar-button :supertype 'eslack
+  'eslack--image-target t
+  'action 'eslack--toggle-message-buttons
+  'keymap (let ((map (make-sparse-keymap)))
+            (set-keymap-parent map button-map)
+            (define-key map [mouse-1] 'push-button)
+            (define-key map "v" 'eslack--debug-message-at-point)
+            map))
+
 (cl-defun eslack--button (text &rest properties &key (type 'eslack) &allow-other-keys)
   (apply #'make-text-button text nil 'type type properties))
 
@@ -754,8 +763,7 @@ properties to it"
     (set-marker-insertion-type start nil)
     (lui-insert (format "%s%s: %s"
                         (eslack--button "[?]"
-                                        'eslack--image-target t
-                                        'action 'eslack--toggle-message-buttons)
+                                        :type 'eslack--avatar-button)
                         (propertize (eslack--get user 'name)
                                     'eslack--user user)
                         (propertize (eslack--decode message-text)
@@ -783,6 +791,11 @@ properties to it"
 
 ;;; Message actions
 ;;;
+(defun eslack--debug-message-at-point (pos)
+  (interactive (list (point)))
+  (pp-display-expression (get-char-property pos 'eslack--message)
+                         "*eslack message*"))
+
 (cl-defmacro eslack--define-message-action (name (message) &optional docstring &body body)
   (declare (indent defun)
            (debug (&define name lambda-list
