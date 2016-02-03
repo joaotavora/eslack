@@ -4,7 +4,7 @@
 
 ;; Version: 0.1
 ;; Author: João Távora <joaotavora@gmail.com>
-;; Package-Requires: ((circe) (websocket))
+;; Package-Requires: ((circe) (websocket) (markdown-mode))
 ;; Keywords: convenience, tools
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -35,6 +35,7 @@
 ;;; Code:
 
 (require 'websocket)
+(require 'markdown-mode)
 (require 'url)
 (require 'lui)
 (require 'tracking)
@@ -52,7 +53,8 @@
   (display-warning 'eslack (apply #'format (concat "[eslack] " format-control) format-args) :debug))
 
 (defun eslack--message (format-control &rest format-args)
-  (message "%s" (apply #'format (concat "[eslack] " format-control) format-args)))
+  (substitute-command-keys
+   (message "%s" (apply #'format (concat "[eslack] " format-control) format-args))))
 
 (defun eslack--warning (format-control &rest format-args)
   (display-warning 'eslack (apply #'format (concat "[eslack] " format-control) format-args) :warning))
@@ -98,7 +100,8 @@ Also don't invalidate any references to object"
                         collect (cons key value))))
   (setcar object (car new-object))
   (setcdr object (append (cdr new-object)
-                         extra))))
+                         extra))
+  object))
 
 (gv-define-setter eslack--get (value object &rest more)
   `(setcdr (eslack--get-internal ,object (list ,@more))
@@ -155,7 +158,7 @@ KEY defaults to the 'ts."
                   (replace-regexp-in-string "_" "-" string))))
 
 (cl-defun eslack--flash-region (start end
-                                      &key (interval 0.2)
+                                      &key (interval 0.1)
                                       (face 'highlight)
                                       (times 1)
                                       finally)
@@ -679,6 +682,7 @@ region."
 (define-button-type 'eslack
   'mouse-face 'highlight
   'face 'eslack-button-face
+  'font-lock-face 'eslack-button-face
   'help-echo "Push with mouse-1 or RET"
   'keymap (let ((map (make-sparse-keymap)))
             (set-keymap-parent map button-map)
@@ -812,6 +816,17 @@ properties to it"
             (,message (get-text-property pos 'eslack--message)))
        ,@body)))
 
+
+;;; Starring messages
+;;;
+(cl-defmethod eslack--event ((_type (eql :star-added)) _subtype message)
+  "A team member has starred an item"
+  (eslack--handle-star-change message))
+
+(cl-defmethod eslack--event ((_type (eql :star-removed)) _subtype message)
+  "A team member removed a star"
+  (eslack--handle-star-change message))
+
 (defun eslack--handle-star-change (frame)
   ;; Calling the arg "FRAME" here to avoid confusion
   (let* ((item (eslack--get frame 'item))
@@ -860,7 +875,28 @@ properties to it"
           (button-put add-star-button 'action newaction)
           (button-put add-star-button 'mouse-action newaction))))))
 
-(defun eslack--handle-message-deletion (frame)
+(eslack--define-message-action eslack-star-message (message)
+  "Star the message at point."
+  (eslack--post :stars.add
+                `((channel . ,(eslack--get message 'channel))
+                  (timestamp . ,(eslack--get message 'ts)))))
+
+(eslack--define-message-action eslack-unstar-message (message)
+  "Unstar the message at point."
+  (eslack--post :stars.remove
+                `((channel . ,(eslack--get message 'channel))
+                  (timestamp . ,(eslack--get message 'ts)))))
+
+;;; Deleting messages
+;;; 
+(eslack--define-message-action eslack-delete-message (message)
+  "Delete the message at point"
+  (eslack--post :chat.delete
+                `((channel . ,(eslack--get message 'channel))
+                  ;; "ts" NOT "timestamp"
+                  (ts . ,(eslack--get message 'ts)))))
+
+(cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql :message-deleted)) frame)
   (let ((channel-buffer
          (eslack--find-channel-buffer (eslack--get frame 'channel))))
     (when channel-buffer
@@ -877,27 +913,86 @@ properties to it"
                                                     (let ((inhibit-read-only t))
                                                       (delete-region start end))))))
                 (t
-                 (eslack--warning "Someone deleted a message that I couldn't find: %s"
+                 (eslack--debug "Someone deleted a message that I couldn't find: %s"
                                   frame))))))))
 
-(eslack--define-message-action eslack-star-message (message)
-  "Star the message at point."
-  (eslack--post :stars.add
-                `((channel . ,(eslack--get message 'channel))
-                  (timestamp . ,(eslack--get message 'ts)))))
+
+;;; Editing messages
+;;; 
+(defvar eslack-edit-message-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") 'eslack-edit-message-commit)
+    (define-key map (kbd "C-c C-k") 'quit-window)
+    map))
 
-(eslack--define-message-action eslack-unstar-message (message)
-  "Unstar the message at point."
-  (eslack--post :stars.remove
-                `((channel . ,(eslack--get message 'channel))
-                  (timestamp . ,(eslack--get message 'ts)))))
+(defvar eslack--editing-message nil)
 
-(eslack--define-message-action eslack-delete-message (message)
+(define-derived-mode eslack-edit-message-mode markdown-mode "eslack-edit"
+  "Edit eslack messages")
+
+(eslack--define-message-action eslack-edit-message (message)
   "Delete the message at point"
-  (eslack--post :chat.delete
-                `((channel . ,(eslack--get message 'channel))
-                  ;; "ts" NOT "timestamp"
-                  (ts . ,(eslack--get message 'ts)))))
+  (let ((cur-text (eslack--get message 'text)))
+    (with-current-buffer (generate-new-buffer "*eslack edit message*")
+      (eslack-edit-message-mode)
+      (setq-local eslack--editing-message message)
+      (insert cur-text)
+      (pop-to-buffer (current-buffer))
+      (eslack--message
+       (concat "Do your edits, then \\[eslack-edit-message-commit] to commit"
+               ", or \\[quit-window] to discard")))))
+
+(defun eslack-edit-message-commit (message)
+  "Commit to the edit of MESSAGE.
+Interactively, should only be called in `eslack-edit' buffers."
+  (interactive (list eslack--editing-message))
+  (let ((window (selected-window)))
+    (eslack--post :chat.update
+                  `((channel . ,(eslack--get message 'channel))
+                    ;; "ts" NOT "timestamp"
+                    (ts . ,(eslack--get message 'ts))
+                    (text . ,(buffer-substring-no-properties
+                              (point-min) (point-max))))
+                  (lambda (_object)
+                    (eslack--message "edit commited")
+                    (if (eq (current-buffer)
+                            (window-buffer window))
+                        (quit-window 'kill window))))))
+
+(cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql :message-changed)) frame)
+  (let ((channel-buffer
+         (eslack--find-channel-buffer (eslack--get frame 'channel)))
+        (new-message (eslack--get frame 'message)))
+    (when channel-buffer
+      (with-current-buffer channel-buffer
+        (let ((cur-message (eslack--find-message (eslack--get new-message 'ts))))
+          (cond (cur-message
+                 (let ((start (eslack--message-start cur-message))
+                       (end (eslack--message-end cur-message)))
+                   (eslack--flash-region start
+                                         end
+                                         :face 'hi-green
+                                         :times 2
+                                         :finally (lambda ()
+                                                    (let ((inhibit-read-only t))
+                                                      (delete-region start end)
+                                                      (let ((saved-marker lui-output-marker))
+                                                        (unwind-protect 
+                                                            (save-excursion
+                                                              (setq lui-output-marker (copy-marker start))
+                                                              (eslack--insert-message
+                                                               (eslack--find
+                                                                (eslack--get new-message 'user)
+                                                                (eslack--users))
+                                                               (eslack--merge cur-message
+                                                                              new-message)
+                                                               nil
+                                                               nil
+                                                               'eslack--edited t))
+                                                          (setq lui-output-marker saved-marker))))))))
+                (t
+                 (eslack--debug "Someone edited a message that I couldn't find: %s"
+                                frame))))))))
 
 
 ;;; Event processing
@@ -918,9 +1013,6 @@ properties to it"
                                 nil
                                 nil)))))
 
-(cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql :message-deleted)) frame)
-  (eslack--handle-message-deletion frame))
-
 (cl-defmethod eslack--event ((_type (eql :user-typing)) _subtype message)
   "A channel member is typing a message"
   (when eslack--buffer-room
@@ -929,6 +1021,9 @@ properties to it"
       (when (eq room eslack--buffer-room)
         (eslack--message "%s is typing" (eslack--get user 'name))))))
 
+
+;;; Unimplemented events
+;;; 
 (cl-defmethod eslack--event ((type (eql :channel-marked)) _subtype message)
   "Your channel read marker was updated"
   (eslack--debug "%s is unimplemented: %s" type message))
@@ -1088,14 +1183,6 @@ properties to it"
 (cl-defmethod eslack--event ((type (eql :team-join)) _subtype message)
   "A new team member has joined"
   (eslack--debug "%s is unimplemented: %s" type message))
-
-(cl-defmethod eslack--event ((_type (eql :star-added)) _subtype message)
-  "A team member has starred an item"
-  (eslack--handle-star-change message))
-
-(cl-defmethod eslack--event ((_type (eql :star-removed)) _subtype message)
-  "A team member removed a star"
-  (eslack--handle-star-change message))
 
 (cl-defmethod eslack--event ((type (eql :reaction-added)) _subtype message)
   "A team member has added an emoji reaction to an item"
