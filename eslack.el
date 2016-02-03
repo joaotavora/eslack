@@ -121,6 +121,16 @@ KEY defaults to the 'ts."
                      (funcall test what prop))
            return probe))
 
+(defun eslack--find-channel-buffer (channel-or-group-or-im)
+  (let ((room (eslack--find channel-or-group-or-im
+                            (eslack--rooms))))
+    (unless room
+      (eslack--warning "Hey can't find a room for %s"
+                       channel-or-group-or-im))
+    (get-buffer
+     (eslack--buffer-name (eslack--connection)
+                          room))))
+
 (defvar eslack-completing-read-function 'ido-completing-read)
 
 (defun eslack--completing-read (prompt choices &optional
@@ -143,6 +153,34 @@ KEY defaults to the 'ts."
 (defun eslack--keywordize (string)
   (intern (concat ":"
                   (replace-regexp-in-string "_" "-" string))))
+
+(cl-defun eslack--flash-region (start end
+                                      &key (interval 0.2)
+                                      (face 'highlight)
+                                      (times 1)
+                                      finally)
+  "Temporarily highlight region from START to END."
+  (let ((overlay (make-overlay start end))
+        (buffer (current-buffer)))
+    (overlay-put overlay 'face face)
+    (overlay-put overlay 'priority 1000)
+    (run-with-timer
+     interval nil
+     (lambda ()
+       (with-current-buffer buffer
+         (delete-overlay overlay)
+         (if (> times 1)
+             (run-with-timer
+              interval nil
+              (lambda ()
+                (with-current-buffer buffer
+                  (eslack--flash-region start end
+                                        :interval interval
+                                        :face face
+                                        :times (1- times)
+                                        :finally finally))))
+           (when finally
+             (funcall finally))))))))
 
 
 ;;; Connections
@@ -809,6 +847,26 @@ properties to it"
           (button-put add-star-button 'action newaction)
           (button-put add-star-button 'mouse-action newaction))))))
 
+(defun eslack--handle-message-deletion (frame)
+  (let ((channel-buffer
+         (eslack--find-channel-buffer (eslack--get frame 'channel))))
+    (when channel-buffer
+      (with-current-buffer channel-buffer
+        (let ((cur-message (eslack--find-message (eslack--get frame 'deleted_ts))))
+          (cond (cur-message
+                 (let ((start (eslack--message-start cur-message))
+                       (end (eslack--message-end cur-message)))
+                   (eslack--flash-region start
+                                         end
+                                         :face 'hi-pink
+                                         :times 2
+                                         :finally (lambda ()
+                                                    (let ((inhibit-read-only t))
+                                                      (delete-region start end))))))
+                (t
+                 (eslack--warning "Someone deleted a message that I couldn't find: %s"
+                                  frame))))))))
+
 (eslack--define-message-action eslack-star-message (message)
   "Star the message at point."
   (eslack--post :stars.add
@@ -818,6 +876,12 @@ properties to it"
 (eslack--define-message-action eslack-unstar-message (message)
   "Unstar the message at point."
   (eslack--post :stars.remove
+                `((channel . ,(eslack--get message 'channel))
+                  (timestamp . ,(eslack--get message 'ts)))))
+
+(eslack--define-message-action eslack-delete-message (message)
+  "Delete the message at point"
+  (eslack--post :chat.delete
                 `((channel . ,(eslack--get message 'channel))
                   (timestamp . ,(eslack--get message 'ts)))))
 
@@ -840,8 +904,8 @@ properties to it"
                                 nil
                                 nil)))))
 
-(cl-defmethod eslack--event ((_type (eql :message)) subtype message)
-  (eslack--debug "subtype %s of message is unimplemented: %s" subtype message))
+(cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql :message-deleted)) frame)
+  (eslack--handle-message-deletion frame))
 
 (cl-defmethod eslack--event ((_type (eql :user-typing)) _subtype message)
   "A channel member is typing a message"
