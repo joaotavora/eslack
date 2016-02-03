@@ -129,29 +129,25 @@ positions that are its bounds"
 
 ;;; Connections
 ;;; 
-
-;; test, out-of-date by now
-;;
-;; Team	User	Token	 
-;; SISCOG	joaot	xoxp-7449361824-7490502034-7536719025-df3a9e
-
-(defvar eslack--token "xoxp-7449361824-7490502034-7536719025-df3a9e")
-
 (defvar eslack--connections (list)
   "Global list of connections.")
 
 (defvar eslack--dispatching-connection nil
   "Connection used within a lexical scope.
 Intended to be let-bound.")
+
 (defvar eslack--buffer-connection nil
   "Connection active in a particular buffer.
 Intended to be buffer-local")
+
 (defvar eslack--default-connection nil
   "Default connection to use when no dispatching or buffer
   connection." )
+
 (defvar eslack--buffer-room nil
   "Server chatroom active in a particular buffer.
 Intended to be buffer-local")
+
 (defvar eslack--last-state nil
   "For debug purposes")
 
