@@ -781,7 +781,8 @@ properties to it"
                                 "\n")
                               " ")
                    'skip t
-                   'invisible t))
+                   'invisible t
+                   'read-only t))
       (set-marker lui-output-marker (point))
 
       (eslack--put message 'eslack--overlay
