@@ -789,10 +789,25 @@ properties to it"
                    (make-overlay start (point) nil t nil))
       (add-text-properties start
                            (point)
-                           properties))
-    
+                           properties)
+      (eslack--update-message message))
     (when profile
       (eslack--insert-image start profile))))
+
+(defun eslack--update-message (message)
+  (cond
+   ((and
+     (eslack--has message 'is_starred)
+     (eslack--get message 'is_starred))
+    ;; Message is starred
+    ;;
+    (overlay-put (eslack--message-overlay message) 'face 'hi-yellow)
+    (eslack--toggle-star-button message "unstar" 'eslack-unstar-message))
+   (t
+    ;; Message is unstarred
+    ;; 
+    (overlay-put (eslack--message-overlay message) 'face nil)
+    (eslack--toggle-star-button message "star" 'eslack-star-message))))
 
 ;;; Message actions
 ;;;
@@ -835,21 +850,9 @@ properties to it"
          (cur-message (and in-message
                            (eslack--find-message (eslack--get in-message 'ts)))))
     (cond (cur-message
-           ;; (eslack--merge cur-message in-message)
-           ;; (eslack--put cur-message 'is_starred
-           ;;              (ignore-errors (eslack--get in-message 'is_starred)))
-           (cond
-            ((ignore-errors (eslack--get in-message 'is_starred))
-             ;; Message is starred
-             ;; 
-             (overlay-put (eslack--message-overlay cur-message) 'face 'hi-yellow)
-             (eslack--toggle-star-button cur-message "unstar" 'eslack-unstar-message)
-             )
-            (t
-             ;; Message is unstarred
-             ;; 
-             (overlay-put (eslack--message-overlay cur-message) 'face nil)
-             (eslack--toggle-star-button cur-message "star" 'eslack-star-message))))
+           (eslack--put cur-message 'is_starred
+                        (ignore-errors (eslack--get in-message 'is_starred)))
+           (eslack--update-message cur-message))
           (t
            (eslack--warning "A user has changed stars on some unsupported item %s..." item)))))
 
