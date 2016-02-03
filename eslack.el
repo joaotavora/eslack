@@ -614,7 +614,7 @@ region."
                                      (with-current-buffer buffer
                                        (funcall on-success status object)))))))))))
 
-(cl-defun eslack--post (method params on-success &optional on-error)
+(cl-defun eslack--post (method params &optional on-success on-error)
   (eslack--web-request (format "https://slack.com/api/%s"
                                (substring (symbol-name method) 1))
                        :post
@@ -627,7 +627,7 @@ region."
                                               (eslack--warning "posting to %s returned: %s"
                                                                method
                                                                (eslack--get object 'error))))
-                                           (t
+                                           (on-success
                                             (funcall on-success object))))))
 
 
@@ -666,7 +666,7 @@ region."
                 ("[mark-unread]" action eslack-mark-message-unread)
                 ("[add-reaction]" action eslack-add-reaction-to-message)
                 ("[pin]" action eslack-pin-message)
-                ("[star]" action eslack-star-message))
+                ("[star]" action eslack-star-message eslack--star-button t))
            collect (apply #'eslack--button label
                           'eslack--collapsable t
                           'eslack--message message
@@ -764,20 +764,54 @@ properties to it"
            ;; (eslack--merge cur-message in-message)
            ;; (eslack--put cur-message 'is_starred
            ;;              (ignore-errors (eslack--get in-message 'is_starred)))
-           (if (ignore-errors (eslack--get in-message 'is_starred)) 
-               (overlay-put (eslack--message-overlay cur-message) 'face 'hi-yellow)
-               (overlay-put (eslack--message-overlay cur-message) 'face nil)))
+           (cond
+            ((ignore-errors (eslack--get in-message 'is_starred))
+             ;; Message is starred
+             ;; 
+             (overlay-put (eslack--message-overlay cur-message) 'face 'hi-yellow)
+             (eslack--toggle-star-button cur-message "unstar" 'eslack-unstar-message)
+             )
+            (t
+             ;; Message is unstarred
+             ;; 
+             (overlay-put (eslack--message-overlay cur-message) 'face nil)
+             (eslack--toggle-star-button cur-message "star" 'eslack-star-message))))
           (t
            (eslack--warning "A user has changed stars on some unsupported item %s..." item)))))
+
+(defun eslack--toggle-star-button (message newtitle newaction)
+  (let ((inhibit-read-only t)
+        (inhibit-point-motion-hooks t)
+        (add-star-button
+         (cl-loop for start = (eslack--message-start message) then next
+                  for probe = (get-text-property start 'eslack--star-button)
+                  for next = (next-single-property-change start 'eslack--star-button
+                                                          nil
+                                                          (eslack--message-end message))
+                  when probe return start
+                  while (not (= next (eslack--message-end message))))))
+    (when add-star-button
+      (save-excursion
+        (goto-char (1+ (button-start add-star-button)))
+        (let ((properties (text-properties-at (button-start add-star-button)))
+              (marker (copy-marker (button-end add-star-button))))
+          (delete-region (point) (1- (button-end add-star-button)))
+          (insert newtitle)
+          (set-text-properties (button-start add-star-button)
+                               marker properties)
+          (button-put add-star-button 'action newaction))))))
 
 (eslack--define-message-action eslack-star-message (message)
   "Star the message at point."
   (eslack--post :stars.add
                 `((channel . ,(eslack--get message 'channel))
-                  (timestamp . ,(eslack--get message 'ts)))
-                (lambda (_object)
-                  ;; (overlay-put (eslack--message-overlay message) 'face 'hi-pink)
-                  )))
+                  (timestamp . ,(eslack--get message 'ts)))))
+
+(eslack--define-message-action eslack-unstar-message (message)
+  "Unstar the message at point."
+  (eslack--post :stars.remove
+                `((channel . ,(eslack--get message 'channel))
+                  (timestamp . ,(eslack--get message 'ts)))))
 
 
 ;;; Event processing
