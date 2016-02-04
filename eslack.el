@@ -997,7 +997,87 @@ Interactively, should only be called in `eslack-edit' buffers."
                                                           (setq lui-output-marker saved-marker))))))))
                 (t
                  (eslack--debug "Someone edited a message that I couldn't find: %s"
-                                frame))))))))
+                                  frame))))))))
+
+
+;;; Adding reactions
+;;; 
+(defun eslack--add-reaction (reactions reaction user)
+  (let ((existing (eslack--find reaction reactions :key 'name)))
+    (cond (existing
+           (eslack--put
+            existing
+            'count
+            (1+ (eslack--get existing 'count)))
+           (eslack--put
+            existing
+            'users
+            (vconcat
+             (eslack--get existing 'users)
+             (vector user))))
+          (t
+           (setq reactions
+                 (vconcat reactions
+                          (vector
+                           `((count . 1)
+                             (users . [,user])
+                             (name . ,reaction)))))))
+    reactions))
+
+(defun eslack--remove-reaction (reactions reaction user)
+  (let ((existing (cl-find-if
+                   (lambda (e)
+                     (and (string= (eslack--get e 'name)
+                                   reaction)
+                          (cl-find user (eslack--get e 'users)
+                                   :test #'string=)))
+                   reactions)))
+    (cond (existing
+           (eslack--put
+            existing
+            'count
+            (1- (eslack--get existing 'count)))
+           (eslack--put
+            existing
+            'users
+            (cl-delete user
+                       (eslack--get existing 'users)
+                       :test #'string=)))
+          (t
+           (eslack--warning "Could not find and remove user %s's %s reaction in %s"
+                            user reaction reactions)))
+    reactions))
+
+(defun eslack--handle-reaction-change (frame fn)
+  (let* ((channel-buffer
+          (eslack--find-channel-buffer
+           (eslack--get frame 'item 'channel))))
+    (cond (channel-buffer
+           (with-current-buffer channel-buffer
+             (let ((message (eslack--find-message (eslack--get frame 'item 'ts))))
+               (cond (message
+                      (eslack--put message
+                                   'reactions
+                                   (funcall fn
+                                            (ignore-errors (eslack--get message 'reactions))
+                                            (eslack--get frame 'reaction)
+                                            (eslack--get frame 'user)))
+                      (eslack--flash-region (eslack--message-start message)
+                                            (eslack--message-end message)))
+                     (t
+                      (eslack--warning "Someone added a reaction to a message I couldn't find: %s"
+                                       frame))))))
+          (t
+           (eslack--warning "Someone added a reaction to a channel I couldn't find: %s"
+                            frame)))))
+
+(cl-defmethod eslack--event ((_type (eql :reaction-added)) _subtype frame)
+  "A team member has added an emoji reaction to an item"
+  (eslack--handle-reaction-change frame #'eslack--add-reaction))
+
+(cl-defmethod eslack--event ((_type (eql :reaction-removed)) _subtype frame)
+  "A team member has added an emoji reaction to an item"
+  (eslack--handle-reaction-change frame #'eslack--remove-reaction))
 
 
 ;;; Event processing
@@ -1187,14 +1267,6 @@ Interactively, should only be called in `eslack-edit' buffers."
 
 (cl-defmethod eslack--event ((type (eql :team-join)) _subtype message)
   "A new team member has joined"
-  (eslack--debug "%s is unimplemented: %s" type message))
-
-(cl-defmethod eslack--event ((type (eql :reaction-added)) _subtype message)
-  "A team member has added an emoji reaction to an item"
-  (eslack--debug "%s is unimplemented: %s" type message))
-
-(cl-defmethod eslack--event ((type (eql :reaction-removed)) _subtype message)
-  "A team member removed an emoji reaction"
   (eslack--debug "%s is unimplemented: %s" type message))
 
 (cl-defmethod eslack--event ((type (eql :emoji-changed)) _subtype message)
