@@ -774,17 +774,38 @@ region."
 (defun eslack--message-end (message)
   (overlay-end (eslack--message-overlay message)))
 
-(defun eslack--insert-message (user message _own-p _pending &rest properties)
+(cl-defun eslack--insert-message (user message
+                                       &key _own-p
+                                       _pending
+                                       changed
+                                       properties)
   "Insert MESSAGE from USER.
 Destructively modifies MESSAGE and adds some `eslack'-specific
 properties to it"
+  ;; fixme: restore-point antics could be much simplified between this
+  ;; and `eslack--update-message-decorations'
   (let* ((properties `(eslack--message ,message ,@properties))
          (message-text (eslack--get message 'text))
          (profile (ignore-errors
                     (eslack--get user 'profile 'image_24)))
          (start (copy-marker lui-output-marker))
-         (lom lui-output-marker))
+         (lom lui-output-marker)
+         (restore-lom)
+         (restore-point
+          (and changed
+               (- (point-marker)
+                  (eslack--get message 'eslack--decorations)))))
     (set-marker-insertion-type start nil)
+
+    (when changed
+      (let ((inhibit-read-only t)
+            (old-start (eslack--message-start message))
+            (old-end (eslack--message-end message)))
+        (delete-region old-start old-end)
+        (setq restore-lom (copy-marker lom))
+        (set-marker lom old-start)
+        (setq start (copy-marker old-start))))
+    
     (lui-insert (format "%s%s: %s"
                         (eslack--button "[?]"
                                         :type 'eslack--avatar-button)
@@ -803,33 +824,47 @@ properties to it"
                    (copy-marker lom))
       (eslack--put message 'eslack--buttons-visible-p
                    (ignore-errors (eslack--get message 'eslack--buttons-visible-p)))
-      (eslack--update-message-decorations message))
+      (eslack--update-message-decorations message :restore-point restore-point)
+      (when (and restore-lom
+                 (> restore-lom lom))
+        (set-marker lom restore-lom)))
     (when profile
       (eslack--insert-image start profile))))
 
-(defun eslack--update-message-decorations (message)
+(cl-defun eslack--update-message-decorations (message
+                                              &key restore-point)
   (let ((inhibit-read-only t)
-        (dec-marker (eslack--get message 'eslack--decorations))
-        (lom lui-output-marker))
-    (unwind-protect
-        (save-excursion
-          (set-marker-insertion-type lom t)
-          (delete-region dec-marker
-                         (eslack--message-end message))
-          (overlay-put (eslack--message-overlay message) 'face nil)
-          (goto-char dec-marker)
-          (when (eslack--starred-p message)
-            (overlay-put (eslack--message-overlay message) 'face 'hi-yellow))
-          (when (eslack--get message 'eslack--buttons-visible-p)
-            (insert
-             (mapconcat #'identity
-                        `(,@(eslack--message-buttons message)
-                          "\n")
-                        " ")))
-          (move-overlay (eslack--message-overlay message)
-                        (eslack--message-start message)
-                        (point)))
-      (set-marker-insertion-type lom nil))))
+        (dec-marker (eslack--get message 'eslack--decorations)))
+    (unless restore-point
+      (setq restore-point
+            (and (< (eslack--message-start message)
+                    (point)
+                    (eslack--message-end message))
+                 (- (point-marker)
+                    dec-marker))))
+    (save-excursion
+      (delete-region dec-marker
+                     (eslack--message-end message))
+      (overlay-put (eslack--message-overlay message) 'face nil)
+      (goto-char dec-marker)
+      (when (eslack--starred-p message)
+        (overlay-put (eslack--message-overlay message) 'face 'hi-yellow))
+      (when (eslack--get message 'eslack--buttons-visible-p)
+        ;; goal is to push the `lui-output-marker', but we have to
+        ;; restore our own dec-marker.
+        (let ((dec-marker-pos (marker-position dec-marker)))
+          (insert-before-markers
+           (mapconcat #'identity
+                      `(,@(eslack--message-buttons message)
+                        "\n")
+                      " "))
+          (set-marker dec-marker dec-marker-pos)))
+      (move-overlay (eslack--message-overlay message)
+                    (eslack--message-start message)
+                    (point)))
+    (when restore-point
+      (goto-char (+ (eslack--get message 'eslack--decorations)
+                    restore-point)))))
 
 ;;; Message actions
 ;;;
@@ -977,24 +1012,13 @@ Interactively, should only be called in `eslack-edit' buffers."
                                          :face 'hi-green
                                          :times 2
                                          :finally (lambda ()
-                                                    (let ((inhibit-read-only t))
-                                                      (delete-region start end)
-                                                      (let ((saved-marker lui-output-marker))
-                                                        (set-marker-insertion-type saved-marker t)
-                                                        (unwind-protect 
-                                                            (save-excursion
-                                                              (setq lui-output-marker (copy-marker start))
-                                                              (eslack--insert-message
-                                                               (eslack--find
-                                                                (eslack--get new-message 'user)
-                                                                (eslack--users))
-                                                               (eslack--merge cur-message
-                                                                              new-message)
-                                                               nil
-                                                               nil
-                                                               'eslack--edited t))
-                                                          (set-marker-insertion-type saved-marker nil)
-                                                          (setq lui-output-marker saved-marker))))))))
+                                                    (eslack--insert-message
+                                                     (eslack--find
+                                                      (eslack--get new-message 'user)
+                                                      (eslack--users))
+                                                     (eslack--merge cur-message
+                                                                    new-message)
+                                                     :changed t)))))
                 (t
                  (eslack--debug "Someone edited a message that I couldn't find: %s"
                                   frame))))))))
@@ -1094,9 +1118,7 @@ Interactively, should only be called in `eslack-edit' buffers."
       (tracking-add-buffer (current-buffer))
       (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
         (eslack--insert-message user
-                                message
-                                nil
-                                nil)))))
+                                message)))))
 
 (cl-defmethod eslack--event ((_type (eql :user-typing)) _subtype message)
   "A channel member is typing a message"
@@ -1350,8 +1372,8 @@ Interactively, should only be called in `eslack-edit' buffers."
      (eslack--insert-message (eslack--find (eslack--get (eslack--self) 'id)
                                            (eslack--users))
                              message
-                             'own
-                             'pending)
+                             :own-p t
+                             :pending t)
      (setq end (copy-marker lui-output-marker))
      (puthash id (list message start end) eslack--awaiting-reply)
      (let ((connection (eslack--connection)))
