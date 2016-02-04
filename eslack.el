@@ -822,6 +822,10 @@ properties to it"
                    (make-overlay start lom nil t nil))
       (eslack--put message 'eslack--decorations
                    (copy-marker lom))
+      (eslack--put message 'eslack--attachment-marker
+                   (copy-marker lom))
+      (eslack--put message 'eslack--reactions
+                   (copy-marker lom))
       (eslack--put message 'eslack--buttons-visible-p
                    (ignore-errors (eslack--get message 'eslack--buttons-visible-p)))
       (eslack--update-message-decorations message :restore-point restore-point)
@@ -830,6 +834,18 @@ properties to it"
         (set-marker lom restore-lom)))
     (when profile
       (eslack--insert-image start profile))))
+
+(cl-defmacro eslack--saving-marker ((marker &rest more) &body body)
+  (declare (indent defun))
+  (let ((saved-marker (cl-gensym "saved-marker-")))
+    `(let ((fn (lambda () ,@body)))
+       (let ((,saved-marker (marker-position ,marker)))
+         (unwind-protect
+             ,(if more
+                  `(eslack--saving-marker (,@more)
+                                          (funcall fn))
+                `(funcall fn))
+           (set-marker ,marker ,saved-marker))))))
 
 (cl-defun eslack--update-message-decorations (message
                                               &key restore-point)
@@ -852,13 +868,29 @@ properties to it"
       (when (eslack--get message 'eslack--buttons-visible-p)
         ;; goal is to push the `lui-output-marker', but we have to
         ;; restore our own dec-marker.
-        (let ((dec-marker-pos (marker-position dec-marker)))
+        (eslack--saving-marker (dec-marker)
           (insert-before-markers
            (mapconcat #'identity
                       `(,@(eslack--message-buttons message)
                         "\n")
-                      " "))
-          (set-marker dec-marker dec-marker-pos)))
+                      " "))))
+      
+      (let ((attachments (ignore-errors
+                           (eslack--get message 'attachments))))
+        (when (and attachments
+                   (cl-plusp (length attachments)))
+          (eslack--saving-marker (dec-marker
+                                  (eslack--get message 'eslack--attachment-marker))
+            (cl-loop for attachment across attachments
+                     for image-url = (eslack--get attachment 'image_url)
+                     for fallback = (eslack--get attachment 'fallback)
+                     for point-before = (copy-marker (point-marker))
+                     do
+                     (insert-before-markers (propertize
+                                             (format "[attachment: %s]" fallback)
+                                             'eslack--image-target
+                                             t))
+                     (eslack--insert-image point-before image-url)))))
       (move-overlay (eslack--message-overlay message)
                     (eslack--message-start message)
                     (point)))
