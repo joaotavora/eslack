@@ -347,7 +347,7 @@ Non-interactively, continuation is a function of a single
 argument, an `eslack--connection' called when everything goes OK."
   (interactive (list (eslack--read-token)
                      (lambda (connection)
-                       (eslack--message "Connected to %s.  Use \\[eslack-join-room] to start chatting"
+                       (eslack--message "Connected to %s.  Use \\[eslack-enter-room] to start chatting"
                                         (eslack--connection-name connection)))))
   (let ((sig (cl-gensym "eslack--")))
     (eslack--log-event `(:connection-attempt
@@ -502,29 +502,35 @@ CONNECTION can also be a string, the API token in use for this connection"
   (cl-mapcan (lambda (seq) (mapcar #'identity seq))
              (list (eslack--groups) (eslack--channels) (eslack--ims))))
 
-(defun eslack--im-room-p (room)
+(defun eslack--room-typep (room key)
   (and
-   (assoc 'is_im room)
-   (eq (eslack--get room 'is_im) t)))
+   (eslack--has room key)
+   (eq (eslack--get room key) t)))
+
 
 (defun eslack--room-name (room)
-  (cond ((eslack--im-room-p room)
+  (cond ((eslack--room-typep room 'is_im)
          (let* ((id (eslack--get room 'user))
                 (user (or (eslack--find id (eslack--users))
                           (eslack--find id (eslack--bots)))))
            (unless user
              (eslack--error "can't find user %s in team state" id))
-           (eslack--get user 'name)))
-        (t
-         (eslack--get room 'name))))
+           (concat "@" (eslack--get user 'name))))
+        ((eslack--room-typep room 'is_group)
+         (concat "$" (eslack--get room 'name)))
+        ((eslack--room-typep room 'is_channel)
+         (concat "#" (eslack--get room 'name)))))
 
-(defun eslack--prompt-for-room ()
-  (let* ((rooms (eslack--rooms))
+(cl-defun eslack--prompt-for-room (&optional (rooms-fn #'eslack--rooms)
+                                             (prompt "Room name?"))
+  (let* ((rooms (funcall rooms-fn))
          (room-name (eslack--completing-read
-                     "[eslack] Room name? "
+                     (format "[eslack] %s " prompt)
                      (mapcar #'eslack--room-name rooms)
                      nil t))
-         (room (cl-find room-name rooms :key #'eslack--room-name)))
+         (room (cl-find room-name rooms :key #'eslack--room-name
+                        :test #'string=)))
+    (cl-assert room nil "Can't find room %s" room-name)
     room))
 
 (defun eslack--buffer-name (connection room)
@@ -547,16 +553,24 @@ CONNECTION can also be a string, the API token in use for this connection"
            (indent 1))
   `(eslack--call-with-room-buffer ,connection ,room (lambda () ,@body)))
 
-(defun eslack-join-room (connection room)
+(defun eslack-join-channel (connection channel)
+  (interactive (let* ((connection (eslack--prompt-for-connection-maybe)))
+                 (list connection
+                       (let ((eslack--dispatching-connection connection))
+                         (eslack--prompt-for-room #'eslack--channels "Channel name?")))))
+  (eslack--post :channels.join
+                `((name . ,(eslack--get channel 'name)))
+                (lambda (_object)
+                  (eslack--with-room-buffer (connection channel)
+                    (pop-to-buffer (current-buffer))))))
+
+(defun eslack-enter-room (connection room)
   (interactive (let* ((connection (eslack--prompt-for-connection-maybe)))
                  (list connection
                        (let ((eslack--dispatching-connection connection))
                          (eslack--prompt-for-room)))))
-  (eslack--post :channels.join
-                `((name . ,(eslack--get room 'name)))
-                (lambda (_object)
-                  (eslack--with-room-buffer (connection room)
-                    (pop-to-buffer (current-buffer))))))
+  (eslack--with-room-buffer (connection room)
+    (pop-to-buffer (current-buffer))))
 
 
 ;;; More utils
