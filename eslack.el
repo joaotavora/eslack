@@ -246,8 +246,11 @@ STATE is a JSON alist returned by the server on first contact."))
                         (substitute-command-keys "\\[eslack]")))))
 
 (defun eslack--connection-live-p (connection)
-  ;; fixme: brittle...
-  (memq connection eslack--connections))
+  ;; fixme: still not spectacularly implemented
+  (let ((openp (websocket-openp (eslack--connection-websocket connection))))
+    (when openp 
+      (prog1 t
+        (cl-assert (memq connection eslack--connections))))))
 
 (cl-defmacro eslack--checking-connection ((connection) &body body)
   `(progn
@@ -290,7 +293,7 @@ STATE is a JSON alist returned by the server on first contact."))
       (erase-buffer)
       (tabulated-list-mode)
       (set (make-local-variable 'tabulated-list-format)
-       `[("Default" 8) ("Name" 24) ("Token" 24 t)])
+       `[("Default" 8) ("Name" 24) ("Token" 24) ("Live" 8 t)])
       (tabulated-list-init-header)
       (set (make-local-variable 'tabulated-list-entries)
            (mapcar
@@ -299,7 +302,7 @@ STATE is a JSON alist returned by the server on first contact."))
                     `[,(if (eq eslack--default-connection conn) "*" " ")
                       ,(eslack--connection-name conn)
                       ,(eslack--connection-token conn)
-                      ;; ,(eslack--connection-state conn)
+                      ,(if (eslack--connection-live-p conn) "yes" "no")
                       ]))
             eslack--connections))
       (tabulated-list-print)
