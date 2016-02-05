@@ -597,6 +597,33 @@ for this connection"
   (eslack--with-room-buffer (connection room)
     (pop-to-buffer (current-buffer))))
 
+(defun eslack-refresh-room (room)
+  (interactive (list eslack--buffer-room))
+  (eslack--post (format "%s.history"
+                        (cond ((eslack--room-typep room 'is_im) "im")
+                              ((eslack--room-typep room 'is_group) "groups")
+                              ((eslack--room-typep room 'is_channel) "channels")
+                              (t
+                               (eslack--error "strange kinda room %s" room))))
+                `((channel . ,(eslack--get room 'id)))
+                (lambda (result)
+                  (let ((messages (eslack--get result 'messages)))
+                    (let ((inhibit-read-only t))
+                      (save-restriction
+                        (widen)
+                        (delete-region (point-min) lui-output-marker)
+                        (cl-loop for message across messages
+                                 for user = (eslack--find (eslack--get message 'user)
+                                                          (eslack--users))
+                                 for timestamp = (eslack--get message 'ts)
+                                 for lui-time-stamp-time = (seconds-to-time
+                                                            (string-to-number
+                                                             timestamp))
+                                 when (string= (eslack--get message 'type)
+                                               "message")
+                                 do (eslack--insert-message user
+                                                            message))))))))
+
 
 ;;; More utils
 ;;;
@@ -706,7 +733,12 @@ region."
   (let ((connection (eslack--connection)))
     (eslack--checking-connection (connection)
       (eslack--web-request (format "https://slack.com/api/%s"
-                                   (substring (symbol-name method) 1))
+                                   (cond ((keywordp method)
+                                          (substring (symbol-name method) 1))
+                                         ((symbolp method)
+                                          (symbol-name method))
+                                         (t
+                                          method)))
                            :post
                            :params (append `((token . ,(eslack--connection-token (eslack--connection))))
                                            params)
