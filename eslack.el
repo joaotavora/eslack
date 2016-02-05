@@ -782,10 +782,15 @@ region."
     (eslack--update-message-decorations message)))
 
 (defun eslack--prepare-message (beg end message)
+  (cl-loop for key in '(attachments
+                        is_starred
+                        reactions
+                        eslack--buttons-visible-p)
+           do (eslack--put message key
+                           (and
+                            (eslack--has message key)
+                            (eslack--get message key))))
   (setf (eslack--overlay message)           (make-overlay beg end nil t nil)
-        (eslack--buttons-visible-p message) (ignore-errors
-                                              (eslack--buttons-visible-p
-                                               message))
         (eslack--buttons-marker message)    (copy-marker end)
         (eslack--attachments-marker message)(copy-marker end)
         (eslack--reactions-marker message)  (copy-marker end)))
@@ -806,7 +811,7 @@ properties to it.
 REPLACED is an old message to replace."
   ;; FIXME: restore-point antics could be much simplified between this
   ;; and `eslack--update-message-decorations'
-  ;; 
+  ;;
   (let* ((message-text (eslack--get message 'text))
          (start (copy-marker lui-output-marker))
          (restore-lom nil)
@@ -884,8 +889,7 @@ REPLACED is an old message to replace."
       ;; Render attachments
       ;;
       (set-marker (eslack--attachments-marker message) (point))
-      (cl-loop for attachment across (ignore-errors
-                                       (eslack--get message 'attachments))
+      (cl-loop for attachment across (eslack--get message 'attachments)
                ;; for image-url = (eslack--get attachment 'image_url)
                for fallback = (eslack--get attachment 'fallback)
                do
@@ -896,8 +900,7 @@ REPLACED is an old message to replace."
       ;; Render reactions
       ;; 
       (set-marker (eslack--reactions-marker message) (point))
-      (cl-loop for reaction across (ignore-errors
-                                     (eslack--get message 'reactions))
+      (cl-loop for reaction across (eslack--get message 'reactions)
                do
                (insert (propertize
                         (format "[reaction: %s]"
@@ -956,12 +959,14 @@ REPLACED is an old message to replace."
 (defun eslack--handle-star-change (frame)
   ;; Calling the arg "FRAME" here to avoid confusion
   (let* ((item (eslack--get frame 'item))
-         (in-message (ignore-errors (eslack--get item 'message)))
+         (in-message (and
+                      (eslack--has item 'message)
+                      (eslack--get item 'message)))
          (cur-message (and in-message
                            (eslack--find-message (eslack--get in-message 'ts)))))
     (cond (cur-message
            (eslack--put cur-message 'is_starred
-                        (ignore-errors (eslack--get in-message 'is_starred)))
+                        (eslack--get in-message 'is_starred))
            (eslack--update-message-decorations cur-message))
           (t
            (eslack--warning "A user has changed stars on some unsupported item %s..." item)))))
@@ -1136,7 +1141,7 @@ Interactively, should only be called in `eslack-edit' buffers."
                       (eslack--put message
                                    'reactions
                                    (funcall fn
-                                            (ignore-errors (eslack--get message 'reactions))
+                                            (eslack--get message 'reactions)
                                             (eslack--get frame 'reaction)
                                             (eslack--get frame 'user)))
                       (eslack--flash-region (eslack--message-start message)
