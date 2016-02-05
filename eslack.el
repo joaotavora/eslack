@@ -1034,7 +1034,8 @@ REPLACED is an old message to replace."
                            (eslack--find-message (eslack--get in-message 'ts)))))
     (cond (cur-message
            (eslack--put cur-message 'is_starred
-                        (eslack--get in-message 'is_starred))
+                        (and (eslack--has in-message 'is_starred)
+                             (eslack--get in-message 'is_starred)))
            (eslack--update-message-decorations cur-message))
           (t
            (eslack--warning "A user has changed stars on some unsupported item %s..." item)))))
