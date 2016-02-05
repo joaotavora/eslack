@@ -399,12 +399,14 @@ argument, an `eslack--connection' called when everything goes OK."
 
 (defvar eslack--events-buffer-token nil)
 
-(defun eslack-events-buffer (connection &optional pop-to-buffer)
+(defun eslack-events-buffer (connection-or-token &optional pop-to-buffer)
   "Return or create the eslack event log buffer."
   (interactive (list (eslack--connection) t))
-  (let* ((token (if (eslack--connection-object-p connection)
+  (let* ((connection (and (eslack--connection-object-p connection-or-token)
+                          connection-or-token))
+         (token (if connection
                     (eslack--connection-token connection)
-                  connection))
+                  connection-or-token))
          (buffer (cl-find token (buffer-list)
                          :test (lambda (token buffer)
                                  (with-current-buffer buffer
@@ -433,11 +435,12 @@ argument, an `eslack--connection' called when everything goes OK."
 	(pp-escape-newlines t))
     (pp event buffer)))
 
-(cl-defun eslack--log-event (event connection type)
+(cl-defun eslack--log-event (event connection-or-token type)
   "Record the fact that EVENT occurred in PROCESS.
-CONNECTION can also be a string, the API token in use for this connection"
+CONNECTION-OR-TOKEN can also be a string, the API token in use
+for this connection"
   (when eslack-log-events
-    (with-current-buffer (eslack-events-buffer connection)
+    (with-current-buffer (eslack-events-buffer connection-or-token)
       ;; trim?
       (when (> (buffer-size) 100000)
         (goto-char (/ (buffer-size) 2))
