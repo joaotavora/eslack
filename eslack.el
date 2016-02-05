@@ -532,7 +532,6 @@ for this connection"
    (eslack--has room key)
    (eq (eslack--get room key) t)))
 
-
 (defun eslack--room-name (room)
   (cond ((eslack--room-typep room 'is_im)
          (let* ((id (eslack--get room 'user))
@@ -569,7 +568,8 @@ for this connection"
       (unless (eq major-mode 'eslack-mode)
         (eslack-mode)
         (setq-local eslack--buffer-room room)
-        (setq-local eslack--buffer-connection connection))
+        (setq-local eslack--buffer-connection connection)
+        (eslack-refresh-room room))
       (funcall fn)
       (goto-char (point-max)))))
 
@@ -613,8 +613,14 @@ for this connection"
                         (widen)
                         (delete-region (point-min) lui-output-marker)
                         (cl-loop for message across messages
-                                 for user = (eslack--find (eslack--get message 'user)
-                                                          (eslack--users))
+                                 for user = (or (eslack--find
+                                                 (and (eslack--has message 'user)
+                                                      (eslack--get message 'user))
+                                                 (eslack--users))
+                                                (eslack--find
+                                                 (and (eslack--has message 'bot_id)
+                                                      (eslack--get message 'bot_id))
+                                                 (eslack--bots)))
                                  for timestamp = (eslack--get message 'ts)
                                  for lui-time-stamp-time = (seconds-to-time
                                                             (string-to-number
@@ -648,13 +654,15 @@ region."
                        (add-text-properties marker end `(display ,image))
                        (insert (propertize "[image]" 'display image
                                            'eslack--image-target 'eslack--synthesized))))))))
-    (let ((res (gethash url eslack--image-cache)))
-      (cond ((and (listp res)
-                  (eq 'image (car res)))
-             (insert-it res marker))
-            ((and (consp nil)
-                  (cl-every #'markerp res))
-             (setcdr res (cons marker (cdr res))))
+    (let ((probe (gethash url eslack--image-cache)))
+      (cond ((eq 'image (car probe))
+             ;; The image is already there, insert it
+             ;; 
+             (insert-it probe marker))
+            (probe
+             ;; A list of markers, insert outseves into it
+             ;; 
+             (setcdr probe (cons marker (cdr probe))))
             (t
              (puthash url (list marker) eslack--image-cache)
              (url-retrieve url
@@ -790,7 +798,8 @@ region."
    (lambda (match)
      (let* ((user-id (match-string 1 match))
             (probe
-             (eslack--find user-id (eslack--users))))
+             (or (eslack--find user-id (eslack--users))
+                 (eslack--find user-id (eslack--bots)))))
        (eslack--button (if probe
                            (format "@%s" (eslack--get probe 'name))
                          match)
@@ -856,22 +865,23 @@ region."
 (defun eslack--message-end (message)
   (overlay-end (eslack--overlay message)))
 
-(defun eslack--who-summarize (users)
+(defun eslack--who-summarize (user-ids)
   (cl-flet ((identify
              (id)
              (decode-coding-string
-              (eslack--get (eslack--find id (eslack--users))
+              (eslack--get (or (eslack--find id (eslack--users))
+                               (eslack--find id (eslack--bots)))
                            'name)
               'utf-8)))
     (let* ((noself (cl-remove (eslack--get (eslack--self) 'id)
-                              users
+                              user-ids
                               :test #'string=))
-           (self-p (not (eq noself users)))
+           (self-p (not (eq noself user-ids)))
            (others-limit (max (if self-p 0 1)
                               (- (min 3
                                       (length noself))
                                  1)))
-           (and-n-others (if (> (length users) 1)
+           (and-n-others (if (> (length user-ids) 1)
                              (- (length noself)
                                 others-limit)
                            0))
@@ -888,18 +898,18 @@ region."
            (and-string
             (and (cl-plusp and-n-others)
                  (if (= 1 and-n-others)
-                     (format " and %s" (identify (aref users
-                                                       (1- (length users)))))
+                     (format " and %s" (identify (aref user-ids
+                                                       (1- (length user-ids)))))
                    (format " and %s others" and-n-others)))))
       
       (list self-p
             (concat comma-separated and-string)))))
 
-(cl-defun eslack--insert-message (user message
+(cl-defun eslack--insert-message (user-or-bot message
                                        &key _own-p
                                        _pending
                                        replaced)
-  "Insert MESSAGE from USER.
+  "Insert MESSAGE from USER-OR-BOT.
 Destructively modifies MESSAGE and adds some `eslack'-specific
 properties to it.
 REPLACED is an old message to replace."
@@ -926,8 +936,8 @@ REPLACED is an old message to replace."
     (lui-insert (format "%s%s: %s"
                         (eslack--button "[?]"
                                         :type 'eslack--avatar-button)
-                        (propertize (eslack--get user 'name)
-                                    'eslack--user user)
+                        (propertize (eslack--get user-or-bot 'name)
+                                    'eslack--user user-or-bot)
                         (propertize (eslack--decode message-text)
                                     'eslack--message-text t)))
     (let ((inhibit-read-only t)
@@ -944,11 +954,13 @@ REPLACED is an old message to replace."
       (setq lui-output-marker restore-lom))
     ;; Finally, schedule some avatar insertion
     ;; 
-    (let ((image-24
-           (ignore-errors
-             (eslack--get user 'profile 'image_24))))
-      (when image-24
-        (eslack--insert-image start image-24)))))
+    (let ((image-url
+           (or (ignore-errors
+                 (eslack--get user-or-bot 'profile 'image_24))
+               (ignore-errors
+                 (eslack--get user-or-bot 'icons 'image_36)))))
+      (when image-url
+        (eslack--insert-image start image-url)))))
 
 (cl-defun eslack--update-message-decorations (message
                                               &key restore-point)
@@ -1266,7 +1278,7 @@ Interactively, should only be called in `eslack-edit' buffers."
 
 ;;; Event processing
 ;;;
-(cl-defgeneric eslack--event (type message))
+(cl-defgeneric eslack--event (type subtype message))
 
 (cl-defmethod eslack--event ((_type (eql :hello)) _subtype _message)
   (eslack--debug "%s says hello." (eslack--connection-name)))
@@ -1274,11 +1286,15 @@ Interactively, should only be called in `eslack-edit' buffers."
 (cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql nil)) message)
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
     (eslack--with-room-buffer ((eslack--connection) room)
-      ;; (pop-to-buffer (current-buffer))
       (tracking-add-buffer (current-buffer))
       (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
-        (eslack--insert-message user
-                                message)))))
+        (eslack--insert-message user message)))))
+
+(cl-defmethod eslack--event ((_type (eql :message)) (_subtype (eql :bot-message)) message)
+  (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
+    (eslack--with-room-buffer ((eslack--connection) room)
+      (let ((bot (eslack--find (eslack--get message 'bot_id) (eslack--bots))))
+        (eslack--insert-message bot message)))))
 
 (cl-defmethod eslack--event ((_type (eql :user-typing)) _subtype message)
   "A channel member is typing a message"
