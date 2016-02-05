@@ -267,10 +267,9 @@ STATE is a JSON alist returned by the server on first contact."))
             (deadp (not (eslack--connection-live-p ,connection)))
             (reusable
              (let ((candidate
-                    (cl-find (eslack--connection-token ,connection)
+                    (cl-find ,connection
                              (cl-remove ,connection eslack--connections)
-                             :key #'eslack--connection-token
-                             :test #'string=)))
+                             :test #'eslack--connection-equal)))
                (if (and candidate
                         (eslack--connection-live-p candidate))
                    candidate))))
@@ -558,20 +557,38 @@ for this connection"
     room))
 
 (defun eslack--buffer-name (connection room)
-  (format "*%s (%s)*"
+  (format "%s (%s)"
           (eslack--room-name room)
           (eslack--connection-name connection)))
 
+(defun eslack--connection-equal (conn1 conn2)
+  (and conn1 conn2
+       (string= (eslack--connection-token conn1)
+                (eslack--connection-token conn2))))
+
+(defun eslack--ensure-room-buffer (connection room)
+  (let ((probe
+         (cl-find-if
+          (lambda (buffer)
+            (with-current-buffer buffer
+              (and eslack--buffer-connection
+                   eslack--buffer-room
+                   (eslack--connection-equal connection eslack--buffer-connection)
+                   (string= (eslack--get room 'id)
+                            (eslack--get eslack--buffer-room 'id)))))
+          (buffer-list))))
+    (or probe
+        (get-buffer-create (eslack--buffer-name connection room)))))
+
 (defun eslack--call-with-room-buffer (connection room fn)
-  (let ((buffer (get-buffer-create (eslack--buffer-name connection room))))
-    (with-current-buffer buffer
-      (unless (eq major-mode 'eslack-mode)
-        (eslack-mode)
-        (setq-local eslack--buffer-room room)
-        (setq-local eslack--buffer-connection connection)
-        (eslack-refresh-room room))
-      (funcall fn)
-      (goto-char (point-max)))))
+  (with-current-buffer (eslack--ensure-room-buffer connection room)
+    (unless (eq major-mode 'eslack-mode)
+      (eslack-mode)
+      (setq-local eslack--buffer-room room)
+      (setq-local eslack--buffer-connection connection)
+      (eslack-refresh-room room))
+    (funcall fn)
+    (goto-char (point-max))))
 
 (cl-defmacro eslack--with-room-buffer ((connection room) &body body)
   (declare (debug (sexp sexp &rest form))
@@ -1287,6 +1304,7 @@ Interactively, should only be called in `eslack-edit' buffers."
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
     (eslack--with-room-buffer ((eslack--connection) room)
       (tracking-add-buffer (current-buffer))
+      
       (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
         (eslack--insert-message user message)))))
 
