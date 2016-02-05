@@ -762,45 +762,38 @@ region."
                           properties)))
 
 (defun eslack--toggle-message-buttons (button)
-  (let* ((message (get-text-property button 'eslack--message))
-         (buttons-visible-p
-          (eslack--buttons-visible-p message)))
-    (overlay-put
-     (eslack--message-overlay message)
-     'eslack--buttons-visible-p (not buttons-visible-p))
+  (let ((message (get-text-property button 'eslack--message)))
+    (eslack--put
+     message
+     'eslack--buttons-visible-p
+     (not (eslack--buttons-visible-p message)))
     (eslack--update-message-decorations message)))
 
-(defun eslack--message-overlay (message)
+(defun eslack--overlay (message)
   (eslack--get message 'eslack--overlay))
 
 (defun eslack--buttons-visible-p (message)
-  (overlay-get (eslack--message-overlay message)
-               'eslack--buttons-visible-p))
+  (eslack--get message 'eslack--buttons-visible-p))
 
 (defun eslack--buttons-marker (message)
-  (overlay-get (eslack--message-overlay message)
-               'eslack--buttons-marker))
+  (eslack--get message 'eslack--buttons-marker))
 
-(defun eslack--attachment-marker (message)
-  (overlay-get (eslack--message-overlay message)
-               'eslack--attachment-marker))
+(defun eslack--attachments-marker (message)
+  (eslack--get message 'eslack--attachments-marker))
 
 (defun eslack--reactions-marker (message)
-  (overlay-get (eslack--message-overlay message)
-               'eslack--reactions-marker))
+  (eslack--get message 'eslack--reactions-marker))
 
-(defun eslack--make-message-overlay (beg end message)
-  (let ((ov (make-overlay beg end nil t nil)))
-    (overlay-put ov 'eslack--buttons-marker
-                 (copy-marker end))
-    (overlay-put ov 'eslack--attachment-marker
-                 (copy-marker end))
-    (overlay-put ov 'eslack--reactions-marker
-                 (copy-marker end))
-    (overlay-put ov 'eslack--buttons-visible-p
-                 (ignore-errors (eslack--buttons-visible-p
-                                 message)))
-    ov))
+(defun eslack--prepare-message (beg end message)
+  (eslack--put message 'eslack--overlay (make-overlay beg end nil t nil))
+  (eslack--put message 'eslack--buttons-visible-p
+               (ignore-errors (eslack--buttons-visible-p message)))
+  (eslack--put message 'eslack--buttons-marker
+               (ignore-errors (copy-marker end)))
+  (eslack--put message 'eslack--attachments-marker
+               (ignore-errors (copy-marker end)))
+  (eslack--put message 'eslack--reactions-marker
+               (ignore-errors (copy-marker end))))
 
 (defun eslack--message-start (message)
   (overlay-start (eslack--message-overlay message)))
@@ -842,10 +835,7 @@ properties to it"
                                     'eslack--message-text t)))
     (let ((inhibit-read-only t)
           (inhibit-point-motion-hooks t))
-      (eslack--put message 'eslack--overlay
-                   (eslack--make-message-overlay start
-                                                 lui-output-marker
-                                                 message))
+      (eslack--prepare-message start lui-output-marker message)
       (eslack--update-message-decorations message :restore-point restore-point)
       (add-text-properties (eslack--message-start message)
                            (eslack--message-end message)
@@ -877,13 +867,13 @@ properties to it"
       (goto-char (eslack--buttons-marker message))
       ;; Reset the overlay face
       ;;
-      (overlay-put (eslack--message-overlay message) 'face nil)
+      (overlay-put (eslack--overlay message) 'face nil)
       (delete-region (eslack--buttons-marker message)
                      (eslack--message-end message))
       ;; Re-render starred status
       ;;
       (when (eslack--starred-p message)
-        (overlay-put (eslack--message-overlay message) 'face 'hi-yellow))
+        (overlay-put (eslack--overlay message) 'face 'hi-yellow))
       ;; Re-render buttons
       ;;
       (when (eslack--buttons-visible-p message)
@@ -895,7 +885,7 @@ properties to it"
                     " ")))
       ;; Render attachments
       ;;
-      (set-marker (eslack--attachment-marker message) (point))
+      (set-marker (eslack--attachments-marker message) (point))
       (cl-loop for attachment across (ignore-errors
                                        (eslack--get message 'attachments))
                ;; for image-url = (eslack--get attachment 'image_url)
