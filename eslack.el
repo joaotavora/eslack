@@ -255,17 +255,37 @@ STATE is a JSON alist returned by the server on first contact."))
         (cl-assert (memq connection eslack--connections))))))
 
 (cl-defmacro eslack--checking-connection ((connection) &body body)
+  (declare (indent 1) (debug (sexp &rest form)))
   `(progn
-     (let* ((buffer (current-buffer))
-            (fn (lambda () ,@body))
-            (deadp (not (eslack--connection-live-p ,connection))))
+     (let* ((fn (lambda () ,@body))
+            (use-this (lambda (connection)
+                        (if eslack--buffer-connection
+                            (setq-local eslack--buffer-connection connection))
+                        (if eslack--dispatching-connection
+                            (setq eslack--dispatching-connection connection))))
+            (buffer (current-buffer))
+            (deadp (not (eslack--connection-live-p ,connection)))
+            (reusable
+             (let ((candidate
+                    (cl-find (eslack--connection-token ,connection)
+                             (cl-remove ,connection eslack--connections)
+                             :key #'eslack--connection-token
+                             :test #'string=)))
+               (if (and candidate
+                        (eslack--connection-live-p candidate))
+                   candidate))))
        (cond ((and deadp
+                   reusable)
+              (eslack--message "Auto-switching buffer connection to live %s" (eslack--connection-name reusable))
+              (funcall use-this reusable)
+              (funcall fn))
+             ((and deadp
                    (y-or-n-p (format "%s is dead. Try re-connecting?"
                                      (eslack--connection-name ,connection))))
               (eslack (eslack--connection-token ,connection)
                       (lambda (connection)
                         (with-current-buffer buffer
-                          (setq-local eslack--buffer-connection connection)
+                          (funcall use-this connection)
                           (funcall fn)
                           (eslack--message "Reconnected to %s."
                                            (eslack--connection-name connection))))))
@@ -682,20 +702,23 @@ region."
                                        (funcall on-success status object)))))))))))
 
 (cl-defun eslack--post (method params &optional on-success on-error)
-  (eslack--web-request (format "https://slack.com/api/%s"
-                               (substring (symbol-name method) 1))
-                       :post
-                       :params (append `((token . ,(eslack--connection-token (eslack--connection))))
-                                       params)
-                       :on-success (lambda (_status object)
-                                     (cond ((eq (eslack--get object 'ok) :json-false)
-                                            (if on-error
-                                                (funcall on-error object)
-                                              (eslack--warning "posting to %s returned: %s"
-                                                               method
-                                                               (eslack--get object 'error))))
-                                           (on-success
-                                            (funcall on-success object))))))
+  "Call METHOD on the Slack API with params"
+  (let ((connection (eslack--connection)))
+    (eslack--checking-connection (connection)
+      (eslack--web-request (format "https://slack.com/api/%s"
+                                   (substring (symbol-name method) 1))
+                           :post
+                           :params (append `((token . ,(eslack--connection-token (eslack--connection))))
+                                           params)
+                           :on-success (lambda (_status object)
+                                         (cond ((eq (eslack--get object 'ok) :json-false)
+                                                (if on-error
+                                                    (funcall on-error object)
+                                                  (eslack--warning "posting to %s returned: %s"
+                                                                   method
+                                                                   (eslack--get object 'error))))
+                                               (on-success
+                                                (funcall on-success object))))))))
 
 
 ;;; Buttons
@@ -802,11 +825,12 @@ region."
   (overlay-end (eslack--overlay message)))
 
 (defun eslack--who-summarize (users)
-  (cl-flet ((identify (id)
-                      id
-                      ;; (eslack--get (eslack--find id (eslack--users))
-                      ;;              'name)
-                      ))
+  (cl-flet ((identify
+             (id)
+             (decode-coding-string
+              (eslack--get (eslack--find id (eslack--users))
+                           'name)
+              'utf-8)))
     (let* ((noself (cl-remove (eslack--get (eslack--self) 'id)
                               users
                               :test #'string=))
