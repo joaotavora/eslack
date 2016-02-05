@@ -801,6 +801,44 @@ region."
 (defun eslack--message-end (message)
   (overlay-end (eslack--overlay message)))
 
+(defun eslack--who-summarize (users)
+  (cl-flet ((identify (id)
+                      id
+                      ;; (eslack--get (eslack--find id (eslack--users))
+                      ;;              'name)
+                      ))
+    (let* ((noself (cl-remove (eslack--get (eslack--self) 'id)
+                              users
+                              :test #'string=))
+           (self-p (not (eq noself users)))
+           (others-limit (max (if self-p 0 1)
+                              (- (min 3
+                                      (length noself))
+                                 1)))
+           (and-n-others (if (> (length users) 1)
+                             (- (length noself)
+                                others-limit)
+                           0))
+           (listed
+            (append (if self-p
+                        '("You"))
+                    (cl-loop for i from 0 below others-limit
+                             for other across noself
+                             collect (identify other))))
+           (comma-separated
+            (mapconcat #'identity
+                       listed
+                       ", "))
+           (and-string
+            (and (cl-plusp and-n-others)
+                 (if (= 1 and-n-others)
+                     (format " and %s" (identify (aref users
+                                                       (1- (length users)))))
+                   (format " and %s others" and-n-others)))))
+      
+      (list self-p
+            (concat comma-separated and-string)))))
+
 (cl-defun eslack--insert-message (user message
                                        &key _own-p
                                        _pending
@@ -901,10 +939,16 @@ REPLACED is an old message to replace."
       ;; 
       (set-marker (eslack--reactions-marker message) (point))
       (cl-loop for reaction across (eslack--get message 'reactions)
+               for (self-reacted-p who-string) = (eslack--who-summarize (eslack--get reaction 'users))
                do
                (insert (propertize
-                        (format "[reaction: %s]"
-                                (eslack--get reaction 'name))
+                        (format "%s reacted with %s%s"
+                                who-string
+                                (eslack--get reaction 'name)
+                                (if self-reacted-p
+                                    (format " %s"
+                                            (eslack--button "[remove]"))
+                                  ""))
                         'eslack--image-target
                         t) "\n"))
       ;; Overlay ends here
