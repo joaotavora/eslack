@@ -107,9 +107,11 @@ Also don't invalidate any references to object"
                          extra))
   object))
 
-(gv-define-setter eslack--get (value object &rest more)
-  `(setcdr (eslack--get-internal ,object (list ,@more))
-           ,value))
+;; Promising, but not used
+;; 
+;; (gv-define-setter eslack--get (value object &rest more)
+;;   `(setcdr (eslack--get-internal ,object (list ,@more))
+;;            ,value))
 
 (cl-defun eslack--find (prop seq &key (key 'id) (test #'string=))
   "Find PROP in sequence SEQ.
