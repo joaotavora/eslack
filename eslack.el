@@ -764,12 +764,43 @@ region."
 (defun eslack--toggle-message-buttons (button)
   (let* ((message (get-text-property button 'eslack--message))
          (buttons-visible-p
-          (eslack--get message 'eslack--buttons-visible-p)))
-    (eslack--put message 'eslack--buttons-visible-p (not buttons-visible-p))
+          (eslack--buttons-visible-p message)))
+    (overlay-put
+     (eslack--message-overlay message)
+     'eslack--buttons-visible-p (not buttons-visible-p))
     (eslack--update-message-decorations message)))
 
 (defun eslack--message-overlay (message)
   (eslack--get message 'eslack--overlay))
+
+(defun eslack--buttons-visible-p (message)
+  (overlay-get (eslack--message-overlay message)
+               'eslack--buttons-visible-p))
+
+(defun eslack--buttons-marker (message)
+  (overlay-get (eslack--message-overlay message)
+               'eslack--buttons-marker))
+
+(defun eslack--attachment-marker (message)
+  (overlay-get (eslack--message-overlay message)
+               'eslack--attachment-marker))
+
+(defun eslack--reactions-marker (message)
+  (overlay-get (eslack--message-overlay message)
+               'eslack--reactions-marker))
+
+(defun eslack--make-message-overlay (beg end message)
+  (let ((ov (make-overlay beg end nil t nil)))
+    (overlay-put ov 'eslack--buttons-marker
+                 (copy-marker end))
+    (overlay-put ov 'eslack--attachment-marker
+                 (copy-marker end))
+    (overlay-put ov 'eslack--reactions-marker
+                 (copy-marker end))
+    (overlay-put ov 'eslack--buttons-visible-p
+                 (ignore-errors (eslack--buttons-visible-p
+                                 message)))
+    ov))
 
 (defun eslack--message-start (message)
   (overlay-start (eslack--message-overlay message)))
@@ -780,33 +811,26 @@ region."
 (cl-defun eslack--insert-message (user message
                                        &key _own-p
                                        _pending
-                                       changed
-                                       properties)
+                                       changed)
   "Insert MESSAGE from USER.
 Destructively modifies MESSAGE and adds some `eslack'-specific
 properties to it"
   ;; fixme: restore-point antics could be much simplified between this
   ;; and `eslack--update-message-decorations'
-  (let* ((properties `(eslack--message ,message ,@properties))
-         (message-text (eslack--get message 'text))
-         (profile (ignore-errors
-                    (eslack--get user 'profile 'image_24)))
+  (let* ((message-text (eslack--get message 'text))
          (start (copy-marker lui-output-marker))
-         (lom lui-output-marker)
-         (restore-lom)
+         (restore-lom nil)
          (restore-point
           (and changed
                (- (point-marker)
-                  (eslack--get message 'eslack--decorations)))))
-    (set-marker-insertion-type start nil)
-
+                  (eslack--buttons-marker message)))))
     (when changed
       (let ((inhibit-read-only t)
             (old-start (eslack--message-start message))
             (old-end (eslack--message-end message)))
         (delete-region old-start old-end)
-        (setq restore-lom (copy-marker lom))
-        (set-marker lom old-start)
+        (setq restore-lom (copy-marker lui-output-marker))
+        (set-marker lui-output-marker old-start)
         (setq start (copy-marker old-start))))
     
     (lui-insert (format "%s%s: %s"
@@ -818,88 +842,94 @@ properties to it"
                                     'eslack--message-text t)))
     (let ((inhibit-read-only t)
           (inhibit-point-motion-hooks t))
-      (add-text-properties start
-                           lom
-                           properties)
       (eslack--put message 'eslack--overlay
-                   (make-overlay start lom nil t nil))
-      (eslack--put message 'eslack--decorations
-                   (copy-marker lom))
-      (eslack--put message 'eslack--attachment-marker
-                   (copy-marker lom))
-      (eslack--put message 'eslack--reactions
-                   (copy-marker lom))
-      (eslack--put message 'eslack--buttons-visible-p
-                   (ignore-errors (eslack--get message 'eslack--buttons-visible-p)))
+                   (eslack--make-message-overlay start
+                                                 lui-output-marker
+                                                 message))
       (eslack--update-message-decorations message :restore-point restore-point)
-      (when (and restore-lom
-                 (> restore-lom lom))
-        (set-marker lom restore-lom)))
-    (when profile
-      (eslack--insert-image start profile))))
+      (add-text-properties (eslack--message-start message)
+                           (eslack--message-end message)
+                           `(eslack--message ,message)))
 
-(cl-defmacro eslack--saving-marker ((marker &rest more) &body body)
-  (declare (indent defun))
-  (let ((saved-marker (cl-gensym "saved-marker-")))
-    `(let ((fn (lambda () ,@body)))
-       (let ((,saved-marker (marker-position ,marker)))
-         (unwind-protect
-             ,(if more
-                  `(eslack--saving-marker (,@more)
-                                          (funcall fn))
-                `(funcall fn))
-           (set-marker ,marker ,saved-marker))))))
+    (when (and restore-lom
+               (> restore-lom
+                  lui-output-marker))
+      (setq lui-output-marker restore-lom))
+    ;; Finally, schedule some avatar insertion
+    ;; 
+    (let ((image-24
+           (ignore-errors
+             (eslack--get user 'profile 'image_24))))
+      (when image-24
+        (eslack--insert-image start image-24)))))
 
 (cl-defun eslack--update-message-decorations (message
                                               &key restore-point)
-  (let ((inhibit-read-only t)
-        (dec-marker (eslack--get message 'eslack--decorations)))
-    (unless restore-point
-      (setq restore-point
-            (and (< (eslack--message-start message)
-                    (point)
-                    (eslack--message-end message))
-                 (- (point-marker)
-                    dec-marker))))
-    (save-excursion
-      (delete-region dec-marker
-                     (eslack--message-end message))
+  (save-excursion
+    (let ((inhibit-read-only t))
+      (unless restore-point
+        (setq restore-point
+              (and (< (eslack--message-start message)
+                      (point)
+                      (eslack--message-end message))
+                   (- (point-marker)
+                      (eslack--buttons-marker message)))))
+      (goto-char (eslack--buttons-marker message))
+      ;; Reset the overlay face
+      ;;
       (overlay-put (eslack--message-overlay message) 'face nil)
-      (goto-char dec-marker)
+      (delete-region (eslack--buttons-marker message)
+                     (eslack--message-end message))
+      ;; Re-render starred status
+      ;;
       (when (eslack--starred-p message)
         (overlay-put (eslack--message-overlay message) 'face 'hi-yellow))
-      (when (eslack--get message 'eslack--buttons-visible-p)
-        ;; goal is to push the `lui-output-marker', but we have to
-        ;; restore our own dec-marker.
-        (eslack--saving-marker (dec-marker)
-          (insert-before-markers
-           (mapconcat #'identity
-                      `(,@(eslack--message-buttons message)
-                        "\n")
-                      " "))))
-      
-      (let ((attachments (ignore-errors
-                           (eslack--get message 'attachments))))
-        (when (and attachments
-                   (cl-plusp (length attachments)))
-          (eslack--saving-marker (dec-marker
-                                  (eslack--get message 'eslack--attachment-marker))
-            (cl-loop for attachment across attachments
-                     for image-url = (eslack--get attachment 'image_url)
-                     for fallback = (eslack--get attachment 'fallback)
-                     for point-before = (copy-marker (point-marker))
-                     do
-                     (insert-before-markers (propertize
-                                             (format "[attachment: %s]" fallback)
-                                             'eslack--image-target
-                                             t))
-                     (eslack--insert-image point-before image-url)))))
+      ;; Re-render buttons
+      ;;
+      (when (eslack--buttons-visible-p message)
+        (goto-char (eslack--buttons-marker message))
+        (insert
+         (mapconcat #'identity
+                    `(,@(eslack--message-buttons message)
+                      "\n")
+                    " ")))
+      ;; Render attachments
+      ;;
+      (set-marker (eslack--attachment-marker message) (point))
+      (cl-loop for attachment across (ignore-errors
+                                       (eslack--get message 'attachments))
+               ;; for image-url = (eslack--get attachment 'image_url)
+               for fallback = (eslack--get attachment 'fallback)
+               do
+               (insert (propertize
+                        (format "[attachment: %s]" fallback)
+                        'eslack--image-target
+                        t) "\n"))
+      ;; Render reactions
+      ;; 
+      (set-marker (eslack--reactions-marker message) (point))
+      (cl-loop for reaction across (ignore-errors
+                                     (eslack--get message 'reactions))
+               do
+               (insert (propertize
+                        (format "[reaction: %s]"
+                                (eslack--get reaction 'name))
+                        'eslack--image-target
+                        t) "\n"))
+      ;; Overlay ends here
+      ;;
       (move-overlay (eslack--message-overlay message)
                     (eslack--message-start message)
-                    (point)))
-    (when restore-point
-      (goto-char (+ (eslack--get message 'eslack--decorations)
-                    restore-point)))))
+                    (point))
+      ;; Maybe restore lom
+      ;;
+      (set-marker lui-output-marker (max lui-output-marker
+                                         (point)))))
+      ;; Maybe restore a point lost in the deleted regions
+      ;; 
+      (when restore-point
+        (goto-char (+ (eslack--buttons-marker message)
+                      restore-point))))
 
 ;;; Message actions
 ;;;
@@ -1122,7 +1152,8 @@ Interactively, should only be called in `eslack-edit' buffers."
                                             (eslack--get frame 'reaction)
                                             (eslack--get frame 'user)))
                       (eslack--flash-region (eslack--message-start message)
-                                            (eslack--message-end message)))
+                                            (eslack--message-end message))
+                      (eslack--update-message-decorations message))
                      (t
                       (eslack--warning "Someone added a reaction to a message I couldn't find: %s"
                                        frame))))))
