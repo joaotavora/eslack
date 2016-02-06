@@ -629,7 +629,7 @@ for this connection"
                       (save-restriction
                         (widen)
                         (delete-region (point-min) lui-output-marker)
-                        (cl-loop for message across messages
+                        (cl-loop for message across (reverse messages)
                                  for user = (or (eslack--find
                                                  (and (eslack--has message 'user)
                                                       (eslack--get message 'user))
@@ -924,7 +924,7 @@ region."
 
 (cl-defun eslack--insert-message (user-or-bot message
                                        &key _own-p
-                                       _pending
+                                       pending
                                        replaced)
   "Insert MESSAGE from USER-OR-BOT.
 Destructively modifies MESSAGE and adds some `eslack'-specific
@@ -964,6 +964,9 @@ REPLACED is an old message to replace."
       (add-text-properties (eslack--message-start message)
                            (eslack--message-end message)
                            `(eslack--message ,message)))
+
+    (when pending
+      (overlay-put (eslack--overlay message) 'face 'shadow))
 
     (when (and restore-lom
                (> restore-lom
@@ -1559,19 +1562,14 @@ Interactively, should only be called in `eslack-edit' buffers."
           (message `((text . ,text)
                      (id . ,id)
                      (channel . ,(eslack--get eslack--buffer-room 'id))
-                     (type . :message)))
-          (start (copy-marker lui-output-marker))
-          end)
-     (set-marker-insertion-type lui-output-marker nil)
+                     (type . :message))))
      (eslack--insert-message (eslack--find (eslack--get (eslack--self) 'id)
                                            (eslack--users))
                              message
                              :own-p t
                              :pending t)
-     (setq end (copy-marker lui-output-marker))
-     (puthash id (list message start end) eslack--awaiting-reply)
-     (let ((connection (eslack--connection)))
-       (eslack--websocket-send connection message))
+     (puthash id message eslack--awaiting-reply)
+     (eslack--websocket-send (eslack--connection) message)
      (goto-char (point-max)))))
 
 (defvar eslack--last-typing-indicator-timestamp (current-time))
@@ -1617,21 +1615,12 @@ The `reply-to' type doesn't really exist in the Slack API, this
 particular method is hack, albeit a pacific one."
   (let* ((id (eslack--get reply-to-message 'reply_to))
          (probe (gethash id eslack--awaiting-reply)))
-    (if probe
-        (cl-destructuring-bind (message start end)
-            probe
-          (with-current-buffer (marker-buffer start)
-            (let ((inhibit-read-only t))
-              (add-text-properties start end
-                                   `(eslack--message ((ts . ,(eslack--get reply-to-message 'ts))
-                                                      ,@message)))
-              (cl-loop for (start end) in (eslack--property-regions start end 'eslack--message-text)
-                       do (add-text-properties start end
-                                               `(face eslack-own-message-face)))
-              (remhash id eslack--awaiting-reply))))
-      (eslack--debug "Ignoring reply for unknown sent message"))))
-
-
+    (cond (probe
+           (remhash id eslack--awaiting-reply)
+           (overlay-put (eslack--overlay probe) 'face nil)
+           (eslack--put probe 'ts (eslack--get reply-to-message 'ts)))
+          (t
+           (eslack--debug "Ignoring reply for unknown sent message")))))
 
 (provide 'eslack)
 ;;; eslack.el ends here
