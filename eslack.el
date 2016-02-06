@@ -1161,12 +1161,14 @@ REPLACED is an old message to replace."
 
 (eslack--define-message-action eslack-edit-message (message)
   "Delete the message at point"
-  (let ((cur-text (eslack--get message 'text)))
+  (let ((cur-text (eslack--get message 'text))
+        (buffer-room eslack--buffer-room))
     (with-current-buffer (generate-new-buffer "*eslack edit message*")
       (eslack-edit-message-mode)
       (setq-local eslack--editing-message message)
       (insert cur-text)
       (pop-to-buffer (current-buffer))
+      (setq-local eslack--buffer-room buffer-room)
       (eslack--message
        (concat "Do your edits, then \\[eslack-edit-message-commit] to commit"
                ", or \\[quit-window] to discard")))))
@@ -1177,7 +1179,7 @@ Interactively, should only be called in `eslack-edit' buffers."
   (interactive (list eslack--editing-message))
   (let ((window (selected-window)))
     (eslack--post :chat.update
-                  `((channel . ,(eslack--get message 'channel))
+                  `((channel . ,(eslack--get eslack--buffer-room 'id))
                     ;; "ts" NOT "timestamp"
                     (ts . ,(eslack--get message 'ts))
                     (text . ,(buffer-substring-no-properties
