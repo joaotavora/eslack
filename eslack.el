@@ -159,6 +159,25 @@ KEY defaults to the 'ts."
            def
            inherit-input-method))
 
+(defun eslack--chat-completion-function ()
+  (let* ((inhibit-field-text-motion t)
+         (match (looking-back "[[:space:]]\\(@[[:word:]]*\\)"
+                              (line-beginning-position)))
+         (beg (match-beginning 1))
+         (end (match-end 1))
+         (completion (and match
+                          (eslack--completing-read
+                           "Username: "
+                           (mapcar (lambda (u)
+                                     (concat "@" (eslack--get u 'name)))
+                                   (eslack--users))
+                           nil
+                           nil
+                           (match-string 1)))))
+    (when completion
+      (delete-region beg end)
+      (insert completion))))
+
 (defun eslack--keywordize (string)
   (intern (concat ":"
                   (replace-regexp-in-string "_" "-" string))))
@@ -561,6 +580,7 @@ for this connection"
   "A major mode for eslack rooms"
   (setq-local left-margin-width 0)
   (setq-local lui-input-function 'eslack--send-message)
+  (setq-local lui-completion-function 'eslack--chat-completion-function)
   (set-buffer-multibyte t)
   (lui-set-prompt "\n: ")
   (add-hook 'post-self-insert-hook 'eslack--send-typing-indicator-maybe
