@@ -903,6 +903,7 @@ region."
                            (and
                             (eslack--has message key)
                             (eslack--get message key))))
+  (eslack--put message 'channel (eslack--get eslack--buffer-room 'id))
   (setf (eslack--overlay message)           (make-overlay beg end nil t nil)
         (eslack--buttons-marker message)    (copy-marker end)
         (eslack--attachments-marker message)(copy-marker end)
