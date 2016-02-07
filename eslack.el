@@ -354,7 +354,13 @@ connection, then the first of the global connection list."
 (defun eslack-close-all ()
   (interactive)
   (cl-loop for conn in eslack--connections
-           do (websocket-close (eslack--connection-websocket conn))))
+           do (eslack--close conn)))
+
+(defun eslack-close (connection &optional interactive)
+  (interactive (list (eslack--prompt-for-connection-maybe) t))
+  (when (or (not interactive)
+            (y-or-n-p (format "Really close %s?" (eslack--connection-name connection))))
+    (websocket-close (eslack--connection-websocket connection))))
 
 (defvar eslack--token-history nil)
 
