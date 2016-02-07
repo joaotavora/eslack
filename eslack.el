@@ -855,6 +855,7 @@ region."
 (eslack--define-accessor eslack--buttons-marker)
 (eslack--define-accessor eslack--attachments-marker)
 (eslack--define-accessor eslack--reactions-marker)
+(eslack--define-accessor eslack--avatar-visible-p)
 
 (defun eslack--toggle-message-buttons (button)
   (let ((message (get-text-property button 'eslack--message)))
@@ -866,7 +867,8 @@ region."
   (cl-loop for key in '(attachments
                         is_starred
                         reactions
-                        eslack--buttons-visible-p)
+                        eslack--buttons-visible-p
+                        eslack--avatar-visible-p)
            do (eslack--put message key
                            (and
                             (eslack--has message key)
@@ -950,11 +952,15 @@ REPLACED is an old message to replace."
         (setq start (copy-marker old-start))))
     ;; `lui-insert', this changes lom for sure
     ;;
-    (lui-insert (format "%s%s: %s"
-                        (eslack--button "[?]"
-                                        :type 'eslack--avatar-button)
-                        (propertize (eslack--get user-or-bot 'name)
-                                    'eslack--user user-or-bot)
+    (lui-insert (format "%s    %s\n"
+                        (if ;; (eslack--avatar-visible-p message)
+                            t
+                            (format "%s %s\n\n"
+                                    (eslack--button "[?]"
+                                                    :type 'eslack--avatar-button)
+                                    (propertize (eslack--get user-or-bot 'name)
+                                                'eslack--user user-or-bot))
+                          "")
                         (propertize (eslack--decode message-text)
                                     'eslack--message-text t)))
     (let ((inhibit-read-only t)
@@ -975,10 +981,11 @@ REPLACED is an old message to replace."
     ;; Finally, schedule some avatar insertion
     ;; 
     (let ((image-url
-           (or (ignore-errors
-                 (eslack--get user-or-bot 'profile 'image_24))
-               (ignore-errors
-                 (eslack--get user-or-bot 'icons 'image_36)))))
+           (and (eslack--avatar-visible-p message)
+                (or (ignore-errors
+                      (eslack--get user-or-bot 'profile 'image_24))
+                    (ignore-errors
+                      (eslack--get user-or-bot 'icons 'image_36))))))
       (when image-url
         (eslack--insert-image start image-url)))))
 
