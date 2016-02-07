@@ -191,6 +191,14 @@ KEY defaults to the 'ts."
            (when finally
              (funcall finally))))))))
 
+(defun eslack--trim-string (str)
+  "Chomp leading and tailing whitespace from STR."
+  ;; lifted from http://www.emacswiki.org/emacs/ElispCookbook
+  (replace-regexp-in-string (rx (or (: bos (* (any " \t\n")))
+                                    (: (* (any " \t\n")) eos)))
+                            ""
+                            str))
+
 
 ;;; Connections
 ;;;
@@ -1069,7 +1077,7 @@ REPLACED is an old message to replace."
                for (self-reacted-p who-string) = (eslack--who-summarize (eslack--get reaction 'users))
                do
                (insert (propertize
-                        (format "%s reacted with %s%s"
+                        (format "%s reacted with :%s:%s"
                                 who-string
                                 (eslack--get reaction 'name)
                                 (if self-reacted-p
@@ -1598,6 +1606,9 @@ Interactively, should only be called in `eslack-edit' buffers."
   "A hash table integer -> sent message")
 
 (defun eslack--send-message (text)
+  (setq text (eslack--trim-string text))
+  (unless (cl-plusp (length text))
+    (eslack--error "Don't send empty mess"))
   (eslack--checking-connection (eslack--buffer-connection)
    (let* ((id (cl-incf eslack--next-message-id))
           (message `((text . ,text)
