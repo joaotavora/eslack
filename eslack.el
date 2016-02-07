@@ -108,7 +108,7 @@ Also don't invalidate any references to object"
   object))
 
 ;; Promising, but not used
-;; 
+;;
 ;; (gv-define-setter eslack--get (value object &rest more)
 ;;   `(setcdr (eslack--get-internal ,object (list ,@more))
 ;;            ,value))
@@ -193,7 +193,7 @@ KEY defaults to the 'ts."
 
 
 ;;; Connections
-;;; 
+;;;
 (defvar eslack--connections (list)
   "Global list of connections.")
 
@@ -236,7 +236,7 @@ STATE is a JSON alist returned by the server on first contact."))
         (eslack--connections
          (let ((team-name (eslack--completing-read
                            "[eslack] Connection? "
-                           (mapcar #'eslack--connection-name 
+                           (mapcar #'eslack--connection-name
                                    eslack--connections)
                            nil t nil nil nil nil)))
            (cl-find team-name eslack--connections
@@ -250,7 +250,7 @@ STATE is a JSON alist returned by the server on first contact."))
 (defun eslack--connection-live-p (connection)
   ;; fixme: still not spectacularly implemented
   (let ((openp (websocket-openp (eslack--connection-websocket connection))))
-    (when openp 
+    (when openp
       (prog1 t
         (cl-assert (memq connection eslack--connections))))))
 
@@ -452,8 +452,8 @@ argument, an `eslack--connection' called when everything goes OK."
 (defun eslack--pprint-event (event buffer)
   "Pretty print EVENT in BUFFER with limited depth and width."
   (let ((print-length 20)
-	(print-level 6)
-	(pp-escape-newlines t))
+        (print-level 6)
+        (pp-escape-newlines t))
     (pp event buffer)))
 
 (cl-defun eslack--log-event (event connection-or-token type)
@@ -489,7 +489,7 @@ for this connection"
 (defun eslack--start-websockets (state token &optional continuation)
   (let ((url (eslack--get state 'url))
         (connection nil))
-    (websocket-open url 
+    (websocket-open url
                     :on-open (lambda (ws)
                                (setq connection (make-instance 'eslack--connection-object
                                                                :websocket ws
@@ -674,11 +674,11 @@ region."
     (let ((probe (gethash url eslack--image-cache)))
       (cond ((eq 'image (car probe))
              ;; The image is already there, insert it
-             ;; 
+             ;;
              (insert-it probe marker))
             (probe
              ;; A list of markers, insert outseves into it
-             ;; 
+             ;;
              (setcdr probe (cons marker (cdr probe))))
             (t
              (puthash url (list marker) eslack--image-cache)
@@ -727,8 +727,7 @@ region."
                             concat (format "%s" a)
                             concat "="
                             concat (format "%s" v)
-                            when rest concat "&"
-                            ))))
+                            when rest concat "&"))))
       (url-retrieve url (lambda (status)
                           (eslack--log-event `((:sig . ,sig)
                                                (:http-status . ,status))
@@ -918,7 +917,7 @@ region."
                      (format " and %s" (identify (aref user-ids
                                                        (1- (length user-ids)))))
                    (format " and %s others" and-n-others)))))
-      
+
       (list self-p
             (concat comma-separated and-string)))))
 
@@ -973,7 +972,7 @@ REPLACED is an old message to replace."
                   lui-output-marker))
       (setq lui-output-marker restore-lom))
     ;; Finally, schedule some avatar insertion
-    ;; 
+    ;;
     (let ((image-url
            (or (ignore-errors
                  (eslack--get user-or-bot 'profile 'image_24))
@@ -1024,7 +1023,7 @@ REPLACED is an old message to replace."
                         'eslack--image-target
                         t) "\n"))
       ;; Render reactions
-      ;; 
+      ;;
       (set-marker (eslack--reactions-marker message) (point))
       (cl-loop for reaction across (eslack--get message 'reactions)
                for (self-reacted-p who-string) = (eslack--who-summarize (eslack--get reaction 'users))
@@ -1049,7 +1048,7 @@ REPLACED is an old message to replace."
       (set-marker lui-output-marker (max lui-output-marker
                                          (point)))))
       ;; Maybe restore a point lost in the deleted regions
-      ;; 
+      ;;
       (when restore-point
         (goto-char (+ (eslack--buttons-marker message)
                       restore-point))))
@@ -1117,7 +1116,7 @@ REPLACED is an old message to replace."
                   (timestamp . ,(eslack--get message 'ts)))))
 
 ;;; Deleting messages
-;;; 
+;;;
 (eslack--define-message-action eslack-delete-message (message)
   "Delete the message at point"
   (eslack--post :chat.delete
@@ -1147,7 +1146,7 @@ REPLACED is an old message to replace."
 
 
 ;;; Editing messages
-;;; 
+;;;
 (defvar eslack-edit-message-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") 'eslack-edit-message-commit)
@@ -1218,7 +1217,7 @@ Interactively, should only be called in `eslack-edit' buffers."
 
 
 ;;; Adding reactions
-;;; 
+;;;
 (defun eslack--add-reaction (reactions reaction user)
   (let ((existing (eslack--find reaction reactions :key 'name)))
     (cond (existing
@@ -1309,7 +1308,7 @@ Interactively, should only be called in `eslack-edit' buffers."
   (let ((room (eslack--find (eslack--get message 'channel) (eslack--rooms))))
     (eslack--with-room-buffer ((eslack--connection) room)
       (tracking-add-buffer (current-buffer))
-      
+
       (let ((user (eslack--find (eslack--get message 'user) (eslack--users))))
         (eslack--insert-message user message)))))
 
@@ -1329,7 +1328,7 @@ Interactively, should only be called in `eslack-edit' buffers."
 
 
 ;;; Unimplemented events
-;;; 
+;;;
 (cl-defmethod eslack--event ((type (eql :channel-marked)) _subtype message)
   "Your channel read marker was updated"
   (eslack--debug "%s is unimplemented: %s" type message))
