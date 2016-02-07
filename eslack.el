@@ -356,14 +356,40 @@ connection, then the first of the global connection list."
   (cl-loop for conn in eslack--connections
            do (websocket-close (eslack--connection-websocket conn))))
 
+(defvar eslack--token-history nil)
+
 (defun eslack--read-token ()
-  (read-from-minibuffer "Token: "
-                        (with-temp-buffer
-                             (clipboard-yank)
-                             (buffer-string))))
+  (let* ((read (read-from-minibuffer
+                "Hostname or token: "
+                (first eslack--token-history)
+                nil
+                nil
+                'eslack--token-history))
+         (token
+          (if (string-match "^xoxp-" read)
+              read
+            (let* ((parsed (netrc-parse "~/.authinfo.gpg"))
+                   (entry (and parsed
+                               (cl-find read parsed
+                                        :test #'string=
+                                        :key (lambda (entry) (cdr (assoc "machine"
+                                                                         entry)))))))
+              (and entry
+                   (cdr (assoc "password" entry)))))))
+    (unless token
+      (eslack--error "Sorry, can't get an eslack token from %s" read))
+    token))
 
 (defun eslack (token &optional continuation)
-  "Start an eslack connection to a server, identified by TOKEN.
+  "Start an connection to an Slack team, identified by TOKEN.
+
+If TOKEN is a Slack full-access token, that identifies a
+slack team.
+
+Interactively, TOKEN can also be a hostname like
+\"myteam.slack.com\" and ~/.authinfo.gpg is consulted to fetch
+the actual TOKEN.
+
 Non-interactively, continuation is a function of a single
 argument, an `eslack--connection' called when everything goes OK."
   (interactive (list (eslack--read-token)
@@ -388,11 +414,18 @@ argument, an `eslack--connection' called when everything goes OK."
        (let ((error (plist-get status :error))
              (redirect (plist-get status :redirect)))
          (when error
-           (signal (car error) (cdr error)))
+           (eslack--error "HTTP error: %s" (cdr error)))
          (when redirect
-           (error "slack requests that you try again to %a" redirect))
+           (eslack--error "slack requests that you try again to %s" redirect))
          (search-forward "\n\n")
          (let ((state (json-read)))
+           (eslack--log-event state
+                              token
+                              :incoming-http-json-status)
+           (unless (and
+                    (eslack--has state 'ok)
+                    (eq (eslack--get state 'ok) t))
+             (eslack--error "API error: %s" (eslack--get state 'error)))
            (setq eslack--last-state state)
            (eslack--start-websockets state token continuation)))))))
 
