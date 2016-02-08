@@ -44,6 +44,8 @@
 (require 'cl-lib)
 (require 'hi-lock)
 
+(require 'eslack-emoji)
+
 
 ;;; Utils
 ;;;
