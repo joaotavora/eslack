@@ -163,19 +163,30 @@ KEY defaults to the 'ts."
 
 (defun eslack--chat-completion-function ()
   (let* ((inhibit-field-text-motion t)
-         (match (looking-back "[[:space:]]\\(@[[:word:]]*\\)"
+         (match (looking-back "[[:space:]]\\(\\(@\\|:\\)[[:word:]]*\\)"
                               (line-beginning-position)))
          (beg (match-beginning 1))
          (end (match-end 1))
-         (completion (and match
-                          (eslack--completing-read
-                           "Username: "
-                           (mapcar (lambda (u)
-                                     (concat "@" (eslack--get u 'name)))
-                                   (eslack--users))
-                           nil
-                           nil
-                           (match-string 1)))))
+         (user-completion (and match
+                               (string= "@" (match-string 2))
+                               (eslack--completing-read
+                                               "Username: "
+                                               (mapcar (lambda (u)
+                                                         (concat "@" (eslack--get u 'name)))
+                                                       (eslack--users))
+                                               nil
+                                               nil
+                                               (match-string 1))))
+         (emoji-completion (and (not user-completion)
+                                match
+                                (eslack--completing-read
+                                  "Emoji: "
+                                  eslack--eslack-emoji-ids
+                                  nil
+                                  nil
+                                  (match-string 1))))
+         (completion (or user-completion
+                         emoji-completion)))
     (when completion
       (delete-region beg end)
       (insert completion))))
