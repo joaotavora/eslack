@@ -182,7 +182,7 @@ KEY defaults to the 'ts."
                                 match
                                 (eslack--completing-read
                                   "Emoji: "
-                                  eslack--eslack-emoji-ids
+                                  (eslack--emoji-ids)
                                   nil
                                   nil
                                   (match-string 1))))
@@ -1300,6 +1300,14 @@ Interactively, should only be called in `eslack-edit' buffers."
 
 ;;; Adding reactions
 ;;;
+(eslack--define-message-action eslack-add-reaction-to-message (message)
+  "Add a reaction to MESSAGE"
+  (let ((reaction (eslack--completing-read "Add an emoji: " (eslack--emoji-ids))))
+    (eslack--post :reactions.add
+                  `((channel . ,(eslack--get eslack--buffer-room 'id))
+                    (timestamp . ,(eslack--get message 'ts))
+                    (name . ,(cl-subseq reaction 1 (1- (length reaction))))))))
+
 (defun eslack--add-reaction (reactions reaction user)
   (let ((existing (eslack--find reaction reactions :key 'name)))
     (cond (existing

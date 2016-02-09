@@ -12489,5 +12489,10 @@
              do (puthash key props hash))
     hash))
 
+(defun eslack--emoji-ids ()
+  (mapcar (lambda (entry)
+            (symbol-name (car entry)))
+          eslack--emoji-alist ))
+
 (provide 'eslack-emoji)
 ;;; eslack-emoji.el ends here
