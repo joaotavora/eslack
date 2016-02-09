@@ -886,6 +886,9 @@ region."
             (define-key map "v" 'eslack--debug-message-at-point)
             map))
 
+(define-button-type 'eslack--remove-reaction :supertype 'eslack
+  'action 'eslack-remove-reaction-from-message)
+
 (cl-defun eslack--button (text &rest properties &key (type 'eslack) &allow-other-keys)
   (apply #'make-text-button text nil 'type type properties))
 
@@ -1116,7 +1119,9 @@ REPLACED is an old message to replace."
                                 (eslack--get reaction 'name)
                                 (if self-reacted-p
                                     (format " %s"
-                                            (eslack--button "[remove]"))
+                                            (eslack--button "[remove]"
+                                                            :type 'eslack--remove-reaction
+                                                            'eslack--reaction-name (eslack--get reaction 'name)))
                                   ""))
                         'eslack--image-target
                         t) "\n"))
@@ -1142,21 +1147,23 @@ REPLACED is an old message to replace."
   (pp-display-expression (get-char-property pos 'eslack--message)
                          "*eslack message*"))
 
-(cl-defmacro eslack--define-message-action (name (message) &optional docstring &body body)
+(cl-defmacro eslack--define-message-action (name (message &optional pos-sym) &optional docstring &body body)
   (declare (indent defun)
            (debug (&define name lambda-list
                            form
                            def-body)))
-  `(defun ,name (&optional button)
-     ,@(if (stringp docstring)
-           (list docstring)
-         (setq body
-               (cons docstring body))
-         nil)
-     (interactive)
-     (let* ((pos (if button (button-start button) (point)))
-            (,message (get-text-property pos 'eslack--message)))
-       ,@body)))
+  (let ((pos-sym (or pos-sym
+                     (cl-gensym "pos"))))
+    `(defun ,name (&optional button)
+       ,@(if (stringp docstring)
+             (list docstring)
+           (setq body
+                 (cons docstring body))
+           nil)
+       (interactive)
+       (let* ((,pos-sym (if button (button-start button) (point)))
+              (,message (get-text-property ,pos-sym 'eslack--message)))
+         ,@body))))
 
 
 ;;; Starring messages
@@ -1307,6 +1314,16 @@ Interactively, should only be called in `eslack-edit' buffers."
                   `((channel . ,(eslack--get eslack--buffer-room 'id))
                     (timestamp . ,(eslack--get message 'ts))
                     (name . ,(cl-subseq reaction 1 (1- (length reaction))))))))
+
+(eslack--define-message-action eslack-remove-reaction-from-message (message pos)
+  (let ((name
+         (get-text-property pos 'eslack--reaction-name)))
+    (eslack--post :reactions\.remove
+                  `((channel \,
+                             (eslack--get eslack--buffer-room 'id))
+                    (timestamp \,
+                               (eslack--get message 'ts))
+                    (name \, name)))))
 
 (defun eslack--add-reaction (reactions reaction user)
   (let ((existing (eslack--find reaction reactions :key 'name)))
