@@ -35,6 +35,7 @@
 ;;; Code:
 
 (require 'websocket)
+(require 'netrc)
 (require 'markdown-mode)
 (require 'url)
 (require 'lui)
